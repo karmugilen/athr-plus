@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MetaEntity::class,
         RideSampleEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AtherDatabase : RoomDatabase() {
@@ -34,7 +34,7 @@ abstract class AtherDatabase : RoomDatabase() {
                     AtherDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }
@@ -43,6 +43,16 @@ abstract class AtherDatabase : RoomDatabase() {
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `ride_history` (`timestamp` INTEGER NOT NULL, `speedKmh` REAL, `odometerKm` REAL, `rangeKm` REAL, PRIMARY KEY(`timestamp`))")
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE trips ADD COLUMN durationSeconds REAL")
+                db.execSQL("ALTER TABLE trips ADD COLUMN averageSpeedKmh REAL")
+                db.execSQL("ALTER TABLE trips ADD COLUMN topSpeedKmh REAL")
+                db.execSQL("ALTER TABLE trips ADD COLUMN encodedPolyline TEXT")
+                db.execSQL("ALTER TABLE trips ADD COLUMN routeSpeeds TEXT")
             }
         }
 

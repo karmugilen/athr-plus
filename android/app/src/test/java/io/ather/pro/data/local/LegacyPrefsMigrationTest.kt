@@ -45,6 +45,11 @@ class LegacyPrefsMigrationTest {
         assertTrue(trips[0].isOfficialRide)
         assertEquals("local-1", trips[1].id)
         assertEquals(1.5, trips[1].socConsumed, 0.001)
+        assertNull(trips[0].durationSeconds)
+        assertNull(trips[0].averageSpeedKmh)
+        assertNull(trips[0].topSpeedKmh)
+        assertNull(trips[0].encodedPolyline)
+        assertNull(trips[0].routeSpeedsKmh)
     }
 
     @Test
@@ -119,5 +124,40 @@ class LegacyPrefsMigrationTest {
         )
         val restored = TripEntity.fromDomain(original).toDomain()
         assertEquals(original, restored)
+    }
+
+    @Test
+    fun tripEntity_roundTripsRouteFieldsAndDropsNonFiniteSpeeds() {
+        val original = io.ather.pro.domain.model.TripRecord(
+            id = "route",
+            startTimeMs = 10,
+            endTimeMs = 20,
+            distanceKm = 1.0,
+            socConsumed = 0.0,
+            energyConsumedWh = 10.0,
+            efficiencyWhPerKm = 10.0,
+            electricityCostInr = 0.1,
+            startOdoKm = 0.0,
+            endOdoKm = 0.0,
+            durationSeconds = 209.3,
+            averageSpeedKmh = 18.3,
+            topSpeedKmh = 30.0,
+            encodedPolyline = "ENCODED",
+            routeSpeedsKmh = listOf(18.0, 20.0)
+        )
+        val entity = TripEntity.fromDomain(original)
+        assertEquals("18.0,20.0", entity.routeSpeeds)
+        assertEquals(original, entity.toDomain())
+
+        val filtered = TripEntity.fromDomain(
+            original.copy(routeSpeedsKmh = listOf(18.0, Double.NaN, Double.POSITIVE_INFINITY, 20.0))
+        )
+        assertEquals("18.0,20.0", filtered.routeSpeeds)
+        assertEquals(listOf(18.0, 20.0), filtered.toDomain().routeSpeedsKmh)
+        assertNull(TripEntity.fromDomain(original.copy(routeSpeedsKmh = emptyList())).routeSpeeds)
+        assertNull(TripEntity.fromDomain(original.copy(routeSpeedsKmh = null)).toDomain().routeSpeedsKmh)
+        assertNull(entity.copy(routeSpeeds = " ").toDomain().routeSpeedsKmh)
+        assertNull(entity.copy(routeSpeeds = "nope").toDomain().routeSpeedsKmh)
+        assertEquals(listOf(18.0, 21.5), entity.copy(routeSpeeds = "18.0, nope, 21.5").toDomain().routeSpeedsKmh)
     }
 }

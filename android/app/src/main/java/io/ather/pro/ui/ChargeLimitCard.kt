@@ -34,16 +34,18 @@ fun ChargeLimitCard(
     modifier: Modifier = Modifier
 ) {
     var selected by rememberSaveable(snapshot.percent) { mutableIntStateOf(snapshot.percent) }
-    var power by rememberSaveable(snapshot.chargerPowerW) { mutableIntStateOf(snapshot.chargerPowerW) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(1_000); now = System.currentTimeMillis() } }
     val active = ChargingControl.isActivelyCharging(dashboard.telemetry)
     val reportedAt = dashboard.batteryReportedAt ?: dashboard.batteryUpdatedAt
-    val unapplied = selected != snapshot.percent || power != snapshot.chargerPowerW
+    val unapplied = selected != snapshot.percent
     val estimate = if (snapshot.enabled && !unapplied && active && snapshot.estimate != null)
         snapshot.estimate else ChargeTimeEstimator.estimate(dashboard.telemetry, selected,
-            dashboard.settings.selectedModel.usableCapacityWh, power, reportedAt ?: 0L, now,
-            dashboard.chargingRatePercentPerMinute, active)
+            dashboard.settings.selectedModel.usableCapacityWh, snapshot.chargerPowerW, reportedAt ?: 0L, now,
+            observedRate = dashboard.chargingRatePercentPerMinute, charging = active,
+            learnedRate = snapshot.learnedPercentPerMinute,
+            learnedMinutes = snapshot.learnedMinutes,
+            liveMinutes = dashboard.chargingRateMinutes)
     val clockFormat = remember { SimpleDateFormat("d MMM, h:mm a", Locale.getDefault()) }
     fun at(time: Long) = clockFormat.format(Date(time))
     fun remaining(until: Long): String {
@@ -80,22 +82,14 @@ fun ChargeLimitCard(
                     FilterChip(selected = selected == target, onClick = { selected = target }, label = { Text("$target%") })
                 }
             }
-            Text("Charger power for estimate", style = MaterialTheme.typography.labelLarge)
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ChargeTimeEstimator.CHARGER_POWERS.forEach { watts ->
-                    FilterChip(selected = power == watts, onClick = { power = watts },
-                        label = { Text("$watts W") })
-                }
-            }
-            Text("Match this to your charger. Used when Ather's ETA and a measured charging rate are unavailable.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(16.dp)) {
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (estimate != null) {
                         Text("Estimated $selected%: ${at(estimate.targetAtMs)}",
                             style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                        Text("${remaining(estimate.targetAtMs)} · ${estimate.basisLabel}",
-                            style = MaterialTheme.typography.bodySmall)
+                        Text("${remaining(estimate.targetAtMs)} · ${estimate.accuracyPercent}% accuracy",
+                            style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Text(estimate.basisLabel, style = MaterialTheme.typography.bodySmall)
                         val timerArmed = snapshot.enabled && !unapplied && snapshot.armed && snapshot.estimate != null &&
                             snapshot.status == ChargeLimitController.Status.MONITORING
                         Text((if (timerArmed) "Scheduled Pause: " else "Pause preview: ") +
@@ -119,16 +113,16 @@ fun ChargeLimitCard(
                         Text("Approximate. Fallback stops slightly early; final charge may differ from $selected%.",
                             style = MaterialTheme.typography.bodySmall)
                     } else {
-                        Text("Waiting for a timestamped battery reading to estimate $selected%.",
+                        Text("No charging speed yet. After one charge, the time starts from that speed and gets closer on later charges.",
                             style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
-            Button(onClick = { onPercentChange(selected, power) }, modifier = Modifier.fillMaxWidth(),
+            Button(onClick = { onPercentChange(selected, snapshot.chargerPowerW) }, modifier = Modifier.fillMaxWidth(),
                 enabled = !pending && (!snapshot.enabled || unapplied)) {
                 Text(if (snapshot.enabled) "Apply $selected% limit" else "Enable $selected% limit")
             }
-            if (snapshot.enabled && unapplied) Text("New target or charger setting has not been applied.", style = MaterialTheme.typography.bodySmall)
+            if (snapshot.enabled && unapplied) Text("New target has not been applied.", style = MaterialTheme.typography.bodySmall)
             snapshot.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             if (snapshot.status == ChargeLimitController.Status.ERROR) {
                 OutlinedButton(onClick = onRetry) { Text("Retry stop at ${snapshot.percent}%") }

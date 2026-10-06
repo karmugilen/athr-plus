@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -64,9 +65,12 @@ import androidx.compose.ui.unit.sp
 import io.ather.pro.domain.battery.kmPerUnitOrNull
 import io.ather.pro.domain.battery.rideEfficiencyKmPerUnit
 import io.ather.pro.domain.model.TripRecord
+import io.ather.pro.domain.ride.RidePolyline
+import io.ather.pro.ui.maps.RideRouteMap
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToLong
 
 private const val COMPACT_TRIP_COUNT = 3
 
@@ -82,10 +86,11 @@ fun TripHistoryPanel(
     var selectedTrip by remember { mutableStateOf<TripRecord?>(null) }
     var showClearDialog by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
-    val visibleTrips = if (expanded || trips.size <= COMPACT_TRIP_COUNT) {
-        trips
+    val rides = remember(trips) { trips.filter { it.hasRecordedSpeed() } }
+    val visibleTrips = if (expanded || rides.size <= COMPACT_TRIP_COUNT) {
+        rides
     } else {
-        trips.take(COMPACT_TRIP_COUNT)
+        rides.take(COMPACT_TRIP_COUNT)
     }
 
     Card(
@@ -108,14 +113,14 @@ fun TripHistoryPanel(
                         color = colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall
                     )
-                    if (trips.isNotEmpty()) {
+                    if (rides.isNotEmpty()) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Surface(
                             color = colorScheme.background,
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Text(
-                                text = "${trips.size}",
+                                text = "${rides.size}",
                                 color = colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -140,11 +145,16 @@ fun TripHistoryPanel(
                 }
             }
 
-            if (trips.isEmpty()) {
-                EmptyTripHistoryState()
+            if (rides.isEmpty()) {
+                if (trips.isEmpty()) EmptyTripHistoryState()
+                else Text(
+                    "Rides with a recorded speed show here. Open one to see it on the map.",
+                    color = colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
             } else {
                 TripOwnershipSummaryCard(
-                    trips = trips,
+                    trips = rides,
                     tariffRate = tariffRate
                 )
 
@@ -156,7 +166,7 @@ fun TripHistoryPanel(
                     )
                 }
 
-                if (trips.size > COMPACT_TRIP_COUNT) {
+                if (rides.size > COMPACT_TRIP_COUNT) {
                     TextButton(
                         onClick = { expanded = !expanded },
                         modifier = Modifier
@@ -165,7 +175,7 @@ fun TripHistoryPanel(
                                 contentDescription = if (expanded) {
                                     "Show less trip history"
                                 } else {
-                                    "See all ${trips.size} trips"
+                                    "See all ${rides.size} trips"
                                 }
                             }
                     ) {
@@ -173,7 +183,7 @@ fun TripHistoryPanel(
                             text = if (expanded) {
                                 "Show less"
                             } else {
-                                "See all (${trips.size})"
+                                "See all (${rides.size})"
                             },
                             color = colorScheme.secondary,
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
@@ -423,7 +433,8 @@ private fun TripRecordCard(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val effectiveCost = calculateCost(trip, tariffRate)
-    val durationText = formatDuration(trip.startTimeMs, trip.endTimeMs)
+    val durationText = durationLabel(trip)
+    val averageChip = averageSpeedChip(trip.averageSpeedKmh)
 
     Card(
         modifier = Modifier
@@ -463,6 +474,20 @@ private fun TripRecordCard(
                         ) {
                             Text(
                                 text = durationText,
+                                color = colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                    if (averageChip != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            color = colorScheme.surface,
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = averageChip,
                                 color = colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
@@ -530,7 +555,10 @@ private fun TripDetailSheetContent(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val effectiveCost = calculateCost(trip, tariffRate)
-    val durationText = formatDuration(trip.startTimeMs, trip.endTimeMs)
+    val durationText = durationLabel(trip)
+    val routePoints = remember(trip.encodedPolyline) { RidePolyline.decode(trip.encodedPolyline) }
+    val averageSpeed = speedKmhText(trip.averageSpeedKmh)
+    val topSpeed = speedKmhText(trip.topSpeedKmh)
 
     Column(
         modifier = Modifier
@@ -560,6 +588,30 @@ private fun TripDetailSheetContent(
             IconButton(onClick = onDismiss) {
                 Icon(Icons.Default.Close, "Close sheet", tint = colorScheme.onSurfaceVariant)
             }
+        }
+
+        if (routePoints.size >= 2) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(220.dp),
+                colors = CardDefaults.cardColors(containerColor = colorScheme.background),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, colorScheme.outline)
+            ) {
+                RideRouteMap(
+                    points = routePoints,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(16.dp))
+                )
+            }
+        } else if (trip.isOfficialRide) {
+            Text(
+                text = "Route was not supplied for this ride.",
+                color = colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
 
         Card(
@@ -690,6 +742,22 @@ private fun TripDetailSheetContent(
                         value = durationText
                     )
                 }
+                if (averageSpeed != null) {
+                    HorizontalDivider(color = colorScheme.outline.copy(alpha = 0.5f), modifier = Modifier.padding(vertical = 8.dp))
+                    DetailMetricRow(
+                        icon = Icons.Default.Speed,
+                        label = "Average speed",
+                        value = averageSpeed
+                    )
+                }
+                if (topSpeed != null) {
+                    HorizontalDivider(color = colorScheme.outline.copy(alpha = 0.5f), modifier = Modifier.padding(vertical = 8.dp))
+                    DetailMetricRow(
+                        icon = Icons.Default.Speed,
+                        label = "Top speed",
+                        value = topSpeed
+                    )
+                }
                 HorizontalDivider(color = colorScheme.outline.copy(alpha = 0.5f), modifier = Modifier.padding(vertical = 8.dp))
                 DetailMetricRow(
                     icon = Icons.Default.Info,
@@ -757,6 +825,45 @@ private fun formatFullDateTime(timestampMs: Long): String {
     if (timestampMs <= 0L) return "--"
     val sdf = SimpleDateFormat("dd MMM yyyy, hh:mm:ss a", Locale.getDefault())
     return sdf.format(Date(timestampMs))
+}
+
+private fun durationLabel(trip: TripRecord): String {
+    val reported = trip.durationSeconds
+    if (reported != null && reported.isFinite() && reported > 0.0) return formatDurationSeconds(reported)
+    return formatDuration(trip.startTimeMs, trip.endTimeMs)
+}
+
+private fun formatDurationSeconds(seconds: Double): String {
+    val totalSeconds = seconds.roundToLong().coerceAtLeast(0L)
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val remainder = totalSeconds % 60L
+    return when {
+        hours > 0L -> "${hours}h ${minutes}m"
+        minutes > 0L -> "${minutes}m ${remainder}s"
+        else -> "${remainder}s"
+    }
+}
+
+private fun TripRecord.hasRecordedSpeed(): Boolean {
+    val speed = averageSpeedKmh ?: return false
+    return speed.isFinite() && speed >= 0.0
+}
+
+private fun speedKmhText(speedKmh: Double?): String? {
+    val speed = speedKmh ?: return null
+    if (!speed.isFinite() || speed < 0.0) return null
+    val normalized = if (speed == 0.0) 0.0 else speed
+    return String.format(Locale.US, "%.1f km/h", normalized)
+}
+
+private fun averageSpeedChip(speedKmh: Double?): String? {
+    val speed = speedKmh ?: return null
+    if (!speed.isFinite() || speed < 0.0) return null
+    val normalized = if (speed == 0.0) 0.0 else speed
+    val rounded = String.format(Locale.US, "%.1f", normalized)
+    val shown = if (rounded.endsWith(".0")) rounded.dropLast(2) else rounded
+    return "$shown km/h avg"
 }
 
 private fun formatDuration(startMs: Long, endMs: Long): String {

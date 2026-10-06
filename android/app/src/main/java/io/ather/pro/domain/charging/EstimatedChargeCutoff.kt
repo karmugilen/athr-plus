@@ -5,7 +5,9 @@ import io.ather.pro.domain.model.ScooterTelemetry
 /** Timed fallback supplements measured cutoff without relaxing measured-data freshness checks. */
 object EstimatedChargeCutoff {
     fun refresh(state: ChargeLimitController.Snapshot, telemetry: ScooterTelemetry?,
-        readingAtMs: Long?, nowMs: Long, capacityWh: Double, observedRate: Double?): ChargeLimitController.Snapshot {
+        readingAtMs: Long?, nowMs: Long, capacityWh: Double, observedRate: Double?,
+        liveMinutes: Double = 0.0, learnedRate: Double? = state.learnedPercentPerMinute,
+        learnedMinutes: Double = state.learnedMinutes): ChargeLimitController.Snapshot {
         if (!state.enabled || !state.armed || state.status != ChargeLimitController.Status.MONITORING) return state
         if (!ChargingControl.isActivelyCharging(telemetry)) {
             // Cancel the timer, but do not permanently block a later Charging
@@ -20,7 +22,9 @@ object EstimatedChargeCutoff {
             existing.targetPercent == state.percent && existing.chargerPowerW == state.chargerPowerW &&
             existing.capacityWh == capacityWh) return state
         val estimate = ChargeTimeEstimator.estimate(telemetry, state.percent, capacityWh,
-            state.chargerPowerW, at, nowMs, observedRate) ?: return if (existing?.capacityWh != capacityWh) state.copy(estimate = null) else state
+            state.chargerPowerW, at, nowMs, observedRate, learnedRate = learnedRate,
+            learnedMinutes = learnedMinutes, liveMinutes = liveMinutes)
+            ?: return if (existing?.capacityWh != capacityWh) state.copy(estimate = null) else state
         return state.copy(estimate = estimate)
     }
 

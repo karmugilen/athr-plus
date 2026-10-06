@@ -29,8 +29,12 @@ class ChargeLimitStore(context: Context) {
         // Its forecasts also used unconverted second counters; rebuild both.
         val barrier = if (currentTimingPolicy) prefs.getLong("${vehicleUuid}_estimate_barrier", -1L)
             .takeIf { it > 0 } else null
+        val learned = learnedRate(vehicleUuid)
         if (!enabled) return ChargeLimitController.Snapshot(percent = percent, chargerPowerW = power,
-            estimateBlockedThroughMs = barrier)
+            estimateBlockedThroughMs = barrier,
+            learnedPercentPerMinute = learned.first,
+            learnedMinutes = learned.second,
+            learnedSessions = learned.third)
         val status = runCatching {
             ChargeLimitController.Status.valueOf(prefs.getString("${vehicleUuid}_status", "MONITORING")!!)
         }.getOrDefault(ChargeLimitController.Status.MONITORING)
@@ -49,7 +53,10 @@ class ChargeLimitStore(context: Context) {
                     ?.takeIf { it.isValid() && it.targetPercent == percent && it.chargerPowerW == power }
             }.getOrNull(),
             stopWasEstimated = prefs.getBoolean("${vehicleUuid}_estimated_stop", false),
-            estimateBlockedThroughMs = barrier
+            estimateBlockedThroughMs = barrier,
+            learnedPercentPerMinute = learned.first,
+            learnedMinutes = learned.second,
+            learnedSessions = learned.third
         )
     }
 
@@ -70,7 +77,20 @@ class ChargeLimitStore(context: Context) {
             .putLong("${vehicleUuid}_estimate_barrier", snapshot.estimateBlockedThroughMs ?: -1L)
             .putInt("${vehicleUuid}_attempts", snapshot.attempts)
             .putLong("${vehicleUuid}_last_attempt", snapshot.lastAttemptMs ?: -1L)
+            .putLong("${vehicleUuid}_learned_rate", snapshot.learnedPercentPerMinute?.let(java.lang.Double::doubleToRawLongBits) ?: -1L)
+            .putLong("${vehicleUuid}_learned_minutes", java.lang.Double.doubleToRawLongBits(snapshot.learnedMinutes))
+            .putInt("${vehicleUuid}_learned_sessions", snapshot.learnedSessions)
             .commit()
+    }
+
+    private fun learnedRate(vehicleUuid: String): Triple<Double?, Double, Int> {
+        val bits = prefs.getLong("${vehicleUuid}_learned_rate", -1L)
+        val rate = if (bits == -1L) null else java.lang.Double.longBitsToDouble(bits)
+            .takeIf { it.isFinite() && it in 0.01..10.0 }
+        val minutes = java.lang.Double.longBitsToDouble(prefs.getLong("${vehicleUuid}_learned_minutes", 0L))
+            .takeIf { it.isFinite() && it > 0.0 } ?: 0.0
+        val sessions = prefs.getInt("${vehicleUuid}_learned_sessions", 0).coerceAtLeast(0)
+        return Triple(rate, if (rate == null) 0.0 else minutes, sessions)
     }
 
     companion object {

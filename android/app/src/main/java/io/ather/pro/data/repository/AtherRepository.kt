@@ -9,6 +9,7 @@ import io.ather.pro.data.local.TripBaseline
 import io.ather.pro.domain.charging.ChargingEvidence
 import io.ather.pro.domain.charging.ChargeLimitController
 import io.ather.pro.domain.charging.ChargeSnapshotRefresh
+import io.ather.pro.domain.charging.ChargeRateMemory
 import io.ather.pro.domain.charging.ChargingRateTracker
 import io.ather.pro.domain.charging.EstimatedChargeCutoff
 import io.ather.pro.domain.battery.BatteryHistory
@@ -155,6 +156,7 @@ class AtherRepository(
             chargeRate.reset()
             _dashboard.update { it.copy(telemetry = null, lastUpdated = null, batteryUpdatedAt = null,
                 chargingUpdatedAt = null, batteryReportedAt = null, chargingRatePercentPerMinute = null,
+                chargingRateMinutes = 0.0,
                 remoteChargingCommand = RemoteChargingCommand()) }
             loadChargeLimitForVehicle(uuid)
         }
@@ -182,7 +184,7 @@ class AtherRepository(
                 errorMessage = null,
                 telemetry = null,
                 lastUpdated = null, gpsUpdatedAt = null, batteryUpdatedAt = null, chargingUpdatedAt = null,
-                batteryReportedAt = null, chargingRatePercentPerMinute = null,
+                batteryReportedAt = null, chargingRatePercentPerMinute = null, chargingRateMinutes = 0.0,
                 vehicleProfile = null,
                 remoteChargingCommand = RemoteChargingCommand()
             )
@@ -538,12 +540,25 @@ class AtherRepository(
         val dashboard = _dashboard.value
         val telemetry = dashboard.telemetry
         val reportedAt = dashboard.batteryReportedAt ?: evidence.batteryAt
-        chargeRate.observe(telemetry, reportedAt, nowMs)
-        if (dashboard.chargingRatePercentPerMinute != chargeRate.percentPerMinute) {
-            _dashboard.update { it.copy(chargingRatePercentPerMinute = chargeRate.percentPerMinute) }
+        val finished = chargeRate.observe(telemetry, reportedAt, nowMs)
+        if (dashboard.chargingRatePercentPerMinute != chargeRate.percentPerMinute ||
+            dashboard.chargingRateMinutes != chargeRate.observedMinutes
+        ) {
+            _dashboard.update {
+                it.copy(
+                    chargingRatePercentPerMinute = chargeRate.percentPerMinute,
+                    chargingRateMinutes = chargeRate.observedMinutes
+                )
+            }
         }
-        val timed = EstimatedChargeCutoff.refresh(_chargeLimit.value, telemetry, reportedAt, nowMs,
-            dashboard.settings.selectedModel.usableCapacityWh, chargeRate.percentPerMinute)
+        if (finished != null) {
+            val learned = ChargeRateMemory.remember(_chargeLimit.value, finished)
+            if (learned != _chargeLimit.value && !updateChargeLimit(learned)) return
+        }
+        val limit = _chargeLimit.value
+        val timed = EstimatedChargeCutoff.refresh(limit, telemetry, reportedAt, nowMs,
+            dashboard.settings.selectedModel.usableCapacityWh, chargeRate.percentPerMinute,
+            chargeRate.observedMinutes, limit.learnedPercentPerMinute, limit.learnedMinutes)
         if (timed != _chargeLimit.value && !updateChargeLimit(timed)) return
         val measuredDecision = ChargeLimitController.onTelemetry(
             state = _chargeLimit.value,

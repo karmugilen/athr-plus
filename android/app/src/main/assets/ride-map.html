@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Ride route</title>
+  <link rel="stylesheet" href="leaflet/leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #0B0D0F;
+      color: #F3F0EA;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    #map {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      background: #0B0D0F;
+      touch-action: none;
+    }
+    .leaflet-container { background: #0B0D0F !important; }
+    .leaflet-tile-pane {
+      filter: invert(1) hue-rotate(180deg) saturate(0.65) brightness(0.85);
+    }
+    .leaflet-control-zoom {
+      border: 1px solid #2C3338 !important;
+      border-radius: 10px !important;
+      overflow: hidden;
+      box-shadow: none !important;
+    }
+    .leaflet-control-zoom a {
+      background: #15191D !important;
+      color: #F3F0EA !important;
+      border-bottom: 1px solid #2C3338 !important;
+      width: 32px !important;
+      height: 32px !important;
+      line-height: 32px !important;
+    }
+    .leaflet-control-attribution {
+      background: rgba(11, 13, 15, 0.85) !important;
+      color: #98A0A5 !important;
+      font-size: 8px !important;
+      padding: 2px 6px !important;
+    }
+    .leaflet-control-attribution a { color: #98A0A5 !important; }
+    #route-missing {
+      position: absolute;
+      inset: 0;
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      background: #0B0D0F;
+      color: #F3F0EA;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    #route-missing[hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="route-missing" hidden>Route was not supplied for this ride.</div>
+  <script src="leaflet/leaflet.js"></script>
+  <script src="ride-map.js"></script>
+</body>
+</html>

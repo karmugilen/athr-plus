@@ -47,7 +47,11 @@ object ChargeLimitController {
         val estimate: ChargeTimeEstimate? = null,
         val stopWasEstimated: Boolean = false,
         /** A manual pause/resume invalidates readings from before that request. */
-        val estimateBlockedThroughMs: Long? = null
+        val estimateBlockedThroughMs: Long? = null,
+        /** Saved charging speed, in percent per minute, from earlier charges. */
+        val learnedPercentPerMinute: Double? = null,
+        val learnedMinutes: Double = 0.0,
+        val learnedSessions: Int = 0
     )
 
     sealed class Decision {
@@ -76,7 +80,10 @@ object ChargeLimitController {
                 armed = false,
                 pendingSinceMs = null,
                 chargerPowerW = power,
-                estimateBlockedThroughMs = previous.estimateBlockedThroughMs
+                estimateBlockedThroughMs = previous.estimateBlockedThroughMs,
+                learnedPercentPerMinute = previous.learnedPercentPerMinute,
+                learnedMinutes = previous.learnedMinutes,
+                learnedSessions = previous.learnedSessions
             )
         }
         val settingsChanged =
@@ -95,7 +102,10 @@ object ChargeLimitController {
             armed = true,
             pendingSinceMs = null,
             chargerPowerW = power,
-            estimateBlockedThroughMs = previous.estimateBlockedThroughMs
+            estimateBlockedThroughMs = previous.estimateBlockedThroughMs,
+            learnedPercentPerMinute = previous.learnedPercentPerMinute,
+            learnedMinutes = previous.learnedMinutes,
+            learnedSessions = previous.learnedSessions
         )
     }
 
@@ -134,6 +144,9 @@ object ChargeLimitController {
                         percent = state.percent,
                         chargerPowerW = state.chargerPowerW,
                         estimateBlockedThroughMs = state.estimateBlockedThroughMs,
+                        learnedPercentPerMinute = state.learnedPercentPerMinute,
+                        learnedMinutes = state.learnedMinutes,
+                        learnedSessions = state.learnedSessions,
                         status = Status.DISABLED,
                         message = null,
                         armed = false,

@@ -194,46 +194,74 @@ class AtherApiClient : AtherCloudApi {
                         return
                     }
                     val result = runCatching {
-                        val root = gson.fromJson(it.body?.string(), JsonObject::class.java)
-                        val trips = root?.get("trips")?.takeIf(JsonElement::isJsonArray)?.asJsonArray
-                            ?: root?.objectOrNull("data")?.get("trips")
-                                ?.takeIf(JsonElement::isJsonArray)?.asJsonArray
-                            ?: JsonArray()
-                        trips.mapNotNull { item ->
-                            val ride = item.takeIf(JsonElement::isJsonObject)?.asJsonObject
-                                ?: return@mapNotNull null
-                            val id = ride.text("ride_id") ?: return@mapNotNull null
-                            val start = ride.epochMillis("ride_start_time") ?: return@mapNotNull null
-                            val end = ride.epochMillis("ride_end_time") ?: start
-                            val distanceKm = (ride.decimal("distance_m") ?: return@mapNotNull null) / 1000.0
-                            if (distanceKm <= 0.0) return@mapNotNull null
-                            val efficiency = ride.decimal("efficiency_wh_km")?.takeIf { value -> value > 0.0 }
-                            val energyWh = efficiency?.times(distanceKm) ?: 0.0
-                            val estimatedSoc = if (energyWh > 0.0 && usableCapacityWh > 0.0) {
-                                energyWh / usableCapacityWh * 100.0
-                            } else 0.0
-                            TripRecord(
-                                id = "ather-$id",
-                                startTimeMs = start,
-                                endTimeMs = end,
-                                distanceKm = distanceKm.round(2),
-                                // Ather's rides API does not return SoC. This estimate is
-                                // retained for cost math but is never presented as measured.
-                                socConsumed = estimatedSoc.round(1),
-                                energyConsumedWh = energyWh.round(1),
-                                efficiencyWhPerKm = (efficiency ?: 0.0).round(1),
-                                electricityCostInr = (energyWh / 1000.0 * tariffRatePerKWh).round(2),
-                                startOdoKm = 0.0,
-                                endOdoKm = 0.0,
-                                estimatedPackCapacityWh = null,
-                                isOfficialRide = true
-                            )
-                        }
+                        val raw = it.body?.string() ?: return@runCatching emptyList()
+                        parseRides(raw, usableCapacityWh, tariffRatePerKWh)
                     }
                     callback(result)
                 }
             }
         })
+    }
+
+    /**
+     * Parses a Cerberus rides payload. A top-level "trips" array wins over data.trips.
+     * Rides without a polyline are kept; route fields stay null.
+     */
+    internal fun parseRides(
+        raw: String,
+        usableCapacityWh: Double,
+        tariffRatePerKWh: Double
+    ): List<TripRecord> {
+        val root = gson.fromJson(raw, JsonObject::class.java)
+        val trips = root?.get("trips")?.takeIf(JsonElement::isJsonArray)?.asJsonArray
+            ?: root?.objectOrNull("data")?.get("trips")
+                ?.takeIf(JsonElement::isJsonArray)?.asJsonArray
+            ?: JsonArray()
+        return trips.mapNotNull { item ->
+            val ride = item.takeIf(JsonElement::isJsonObject)?.asJsonObject ?: return@mapNotNull null
+            val id = ride.text("ride_id") ?: return@mapNotNull null
+            val start = ride.epochMillis("ride_start_time") ?: return@mapNotNull null
+            val end = ride.epochMillis("ride_end_time") ?: start
+            val distanceKm = (ride.decimal("distance_m") ?: return@mapNotNull null) / 1000.0
+            if (distanceKm <= 0.0) return@mapNotNull null
+            val efficiency = ride.decimal("efficiency_wh_km")?.takeIf { value -> value > 0.0 }
+            val energyWh = efficiency?.times(distanceKm) ?: 0.0
+            val estimatedSoc = if (energyWh > 0.0 && usableCapacityWh > 0.0) {
+                energyWh / usableCapacityWh * 100.0
+            } else 0.0
+            val polyline = ride.objectOrNull("polyline_details")
+            TripRecord(
+                id = "ather-$id",
+                startTimeMs = start,
+                endTimeMs = end,
+                distanceKm = distanceKm.round(2),
+                // Ather's rides API does not return SoC. This estimate is
+                // retained for cost math but is never presented as measured.
+                socConsumed = estimatedSoc.round(1),
+                energyConsumedWh = energyWh.round(1),
+                efficiencyWhPerKm = (efficiency ?: 0.0).round(1),
+                electricityCostInr = (energyWh / 1000.0 * tariffRatePerKWh).round(2),
+                startOdoKm = 0.0,
+                endOdoKm = 0.0,
+                estimatedPackCapacityWh = null,
+                isOfficialRide = true,
+                durationSeconds = ride.nonNegativeFinite("duration_secs"),
+                averageSpeedKmh = ride.nonNegativeFinite("avg_display_speed_kmph"),
+                topSpeedKmh = ride.nonNegativeFinite("max_display_speed_kmph"),
+                encodedPolyline = polyline?.text("polyline"),
+                routeSpeedsKmh = polyline.speedSamples()
+            )
+        }
+    }
+
+    private fun JsonObject.nonNegativeFinite(key: String): Double? =
+        decimal(key)?.takeIf { value -> value.isFinite() && value >= 0.0 }
+
+    private fun JsonObject?.speedSamples(): List<Double>? {
+        val array = this?.get("speed")?.takeIf(JsonElement::isJsonArray)?.asJsonArray ?: return null
+        return array.mapNotNull { element ->
+            element.asSafeDouble()?.takeIf { speed -> speed.isFinite() && speed >= 0.0 }
+        }.takeIf { it.isNotEmpty() }
     }
 
     private fun resultCallback(callback: (Result<Unit>) -> Unit) = object : Callback {

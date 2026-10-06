@@ -17,7 +17,13 @@ data class TripEntity(
     val startOdoKm: Double,
     val endOdoKm: Double,
     val estimatedPackCapacityWh: Double? = null,
-    val isOfficialRide: Boolean = false
+    val isOfficialRide: Boolean = false,
+    val durationSeconds: Double? = null,
+    val averageSpeedKmh: Double? = null,
+    val topSpeedKmh: Double? = null,
+    val encodedPolyline: String? = null,
+    /** Comma-separated km/h samples. Blank and non-finite values become a null list. */
+    val routeSpeeds: String? = null
 ) {
     fun toDomain(): TripRecord = TripRecord(
         id = id,
@@ -31,7 +37,12 @@ data class TripEntity(
         startOdoKm = startOdoKm,
         endOdoKm = endOdoKm,
         estimatedPackCapacityWh = estimatedPackCapacityWh,
-        isOfficialRide = isOfficialRide
+        isOfficialRide = isOfficialRide,
+        durationSeconds = durationSeconds,
+        averageSpeedKmh = averageSpeedKmh,
+        topSpeedKmh = topSpeedKmh,
+        encodedPolyline = encodedPolyline,
+        routeSpeedsKmh = routeSpeeds.toSpeedList()
     )
 
     companion object {
@@ -47,7 +58,24 @@ data class TripEntity(
             startOdoKm = trip.startOdoKm,
             endOdoKm = trip.endOdoKm,
             estimatedPackCapacityWh = trip.estimatedPackCapacityWh,
-            isOfficialRide = trip.isOfficialRide
+            isOfficialRide = trip.isOfficialRide,
+            durationSeconds = trip.durationSeconds,
+            averageSpeedKmh = trip.averageSpeedKmh,
+            topSpeedKmh = trip.topSpeedKmh,
+            encodedPolyline = trip.encodedPolyline,
+            routeSpeeds = trip.routeSpeedsKmh.toSpeedColumn()
         )
+
+        private fun String?.toSpeedList(): List<Double>? {
+            if (isNullOrBlank()) return null
+            return split(',')
+                .mapNotNull { token -> token.trim().toDoubleOrNull()?.takeIf(Double::isFinite) }
+                .takeIf { it.isNotEmpty() }
+        }
+
+        private fun List<Double>?.toSpeedColumn(): String? {
+            if (isNullOrEmpty()) return null
+            return filter(Double::isFinite).takeIf { it.isNotEmpty() }?.joinToString(",")
+        }
     }
 }

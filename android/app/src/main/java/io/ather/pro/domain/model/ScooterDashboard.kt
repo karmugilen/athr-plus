@@ -161,7 +161,12 @@ data class TripRecord(
     val startOdoKm: Double,
     val endOdoKm: Double,
     val estimatedPackCapacityWh: Double? = null,
-    val isOfficialRide: Boolean = false
+    val isOfficialRide: Boolean = false,
+    val durationSeconds: Double? = null,
+    val averageSpeedKmh: Double? = null,
+    val topSpeedKmh: Double? = null,
+    val encodedPolyline: String? = null,
+    val routeSpeedsKmh: List<Double>? = null
 )
 
 data class ScooterTelemetry(
@@ -318,6 +323,8 @@ data class ScooterDashboardState(
     /** Timestamp of the actual battery report, including cached reports. */
     val batteryReportedAt: Long? = null,
     val chargingRatePercentPerMinute: Double? = null,
+    /** Minutes of this charge used to measure [chargingRatePercentPerMinute]. */
+    val chargingRateMinutes: Double = 0.0,
     val chargingUpdatedAt: Long? = null,
     val settings: ScooterSettings = ScooterSettings(),
     val recentTrips: List<TripRecord> = emptyList(),
