@@ -113,6 +113,11 @@
     @media (prefers-reduced-motion: reduce) { .ather-marker-pulse, .phone-marker-pulse { animation: none; } }
     #tile-status { top: 35px; }
     [hidden] { display: none !important; }
+    .phone-marker-container.heading-unavailable::after {
+      content: ''; position: absolute; top: 50%; left: 50%;
+      width: 12px; height: 12px; transform: translate(-50%, -50%);
+      background: #00B0FF; border: 2px solid #fff; border-radius: 50%;
+    }
 
     /* Ather Vehicle Marker (Glowing Round Dot with Pulse) */
     .ather-marker-container {

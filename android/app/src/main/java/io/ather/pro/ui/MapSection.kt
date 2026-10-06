@@ -20,13 +20,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
-import android.view.MotionEvent
-import android.view.Surface
-import android.view.ViewGroup
+import android.view.Surface as DisplaySurface
 import android.view.WindowManager
-import android.webkit.WebSettings
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.Toast
 
 import androidx.compose.foundation.background
@@ -53,6 +49,8 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -67,8 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -84,14 +81,15 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.ather.pro.domain.model.GpsData
 import io.ather.pro.ui.maps.StreetMapView
-import androidx.compose.runtime.rememberUpdatedState
+import io.ather.pro.ui.maps.CompassHeading
+import io.ather.pro.ui.maps.CompassReading
+import io.ather.pro.ui.maps.HeadingSampleGate
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
@@ -125,203 +123,165 @@ fun MapSection(
     val atherLat = gps?.latitude?.takeIf { it.isFinite() && it in -90.0..90.0 }
     val atherLng = gps?.longitude?.takeIf { it.isFinite() && it in -180.0..180.0 }
     val atherAcc = gps?.accuracyMeters?.takeIf { it.isFinite() && it >= 0.0 }
-    val atherAlt = gps?.altitudeMeters?.takeIf(Double::isFinite)
-    val scooterReference by rememberUpdatedState(gps)
     val hasScooterFix = atherLat != null && atherLng != null
 
-    // Phone / User live GPS and Compass states
-    var phoneLat by remember { mutableStateOf<Double?>(null) }
-    var phoneLng by remember { mutableStateOf<Double?>(null) }
-    var phoneAcc by remember { mutableStateOf<Float?>(null) }
-    var hasLocationPermission by remember {
-        mutableStateOf(checkLocationPermission(context))
-    }
-    var locationServicesOn by remember {
-        mutableStateOf(checkLocationServicesEnabled(context))
-    }
-    var azimuthDegrees by remember { mutableFloatStateOf(0f) }
-    var unwrappedAzimuth by remember { mutableFloatStateOf(0f) }
-    var hasInitAzimuth by remember { mutableStateOf(false) }
-    var compassAccuracy by remember { mutableIntStateOf(SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM) }
-    // Manual-only recalibrate (token 0 = never auto-lock on first composition).
-    var isRecalibrating by remember { mutableStateOf(false) }
-    var recalibrateToken by remember { mutableIntStateOf(0) }
-
-    val calibAccum = remember {
-        object {
-            var sinSum = 0.0
-            var cosSum = 0.0
-            var count = 0
-            var token = -1
-            fun reset(t: Int) {
-                sinSum = 0.0
-                cosSum = 0.0
-                count = 0
-                token = t
-            }
-            fun ensureToken(t: Int) {
-                if (token != t) reset(t)
-            }
-            fun meanDegreesOrNull(): Float? {
-                if (count < 1) return null
-                val mean = Math.toDegrees(atan2(sinSum, cosSum)).toFloat()
-                return (mean + 360f) % 360f
-            }
+    // Retain complete phone fixes, including their altitude and monotonic timestamp.
+    var phoneLocation by remember { mutableStateOf<Location?>(null) }
+    var compassReading by remember { mutableStateOf<CompassReading?>(null) }
+    var compassAvailable by remember { mutableStateOf(false) }
+    var showCompassHelp by remember { mutableStateOf(false) }
+    var freshnessTick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000L)
+            freshnessTick += 1L
         }
     }
+    val nowNs = remember(phoneLocation, compassReading, freshnessTick) { SystemClock.elapsedRealtimeNanos() }
+    val phoneFix = phoneLocation?.takeIf {
+        CompassHeading.isFresh(it.elapsedRealtimeNanos, nowNs, CompassHeading.LOCATION_MAX_AGE_NS)
+    }
+    val phoneLat = phoneFix?.latitude
+    val phoneLng = phoneFix?.longitude
+    val phoneAcc = phoneFix?.takeIf { it.hasAccuracy() }?.accuracy
+    val phoneAlt = phoneFix?.takeIf { it.hasAltitude() && it.altitude.isFinite() }?.altitude ?: 0.0
+    var hasLocationPermission by remember { mutableStateOf(checkLocationPermission(context)) }
+    var locationServicesOn by remember { mutableStateOf(checkLocationServicesEnabled(context)) }
 
-    // Compass / rotation sensor listener corrected for display rotation and true north.
-    DisposableEffect(lifecycleOwner) {
+    // Never substitute the scooter's position or (0,0) for the phone's north correction.
+    val declination = remember(phoneLat, phoneLng, phoneAlt) {
+        if (phoneLat != null && phoneLng != null) {
+            GeomagneticField(phoneLat.toFloat(), phoneLng.toFloat(), phoneAlt.toFloat(),
+                System.currentTimeMillis()).declination
+        } else null
+    }
+    val freshReading = compassReading?.takeIf {
+        CompassHeading.isFresh(it.timestampNs, nowNs, CompassHeading.SENSOR_MAX_AGE_NS)
+    }
+    val azimuthDegrees = CompassHeading.trueNorth(freshReading?.magneticDegrees, declination,
+        freshReading?.accuracy ?: SensorManager.SENSOR_STATUS_UNRELIABLE, freshReading?.headingErrorDegrees)
+    val compassStatus = when {
+        !compassAvailable -> "Compass sensor unavailable · north up"
+        freshReading == null -> "Waiting for compass · north up"
+        freshReading.accuracy <= SensorManager.SENSOR_STATUS_UNRELIABLE ->
+            "Compass unreliable · move away from magnets · north up"
+        freshReading.magneticDegrees == null -> "Tilt the phone away from upright · north up"
+        (freshReading.headingErrorDegrees ?: 0f) > CompassHeading.MAX_HEADING_ERROR_DEGREES ->
+            "Compass error too large · tap the compass for help · north up"
+        phoneFix == null -> "Waiting for phone location for true north · north up"
+        freshReading.accuracy == SensorManager.SENSOR_STATUS_ACCURACY_LOW ->
+            "Compass accuracy low · tap the compass for help"
+        else -> freshReading.headingErrorDegrees?.let {
+            "True north · estimated compass error ±${kotlin.math.ceil(it.toDouble()).toInt()}°"
+        } ?: "True north · compass error estimate unavailable"
+    }
+
+    DisposableEffect(lifecycleOwner, context) {
         val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
         @Suppress("DEPRECATION")
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
-
-        // Prefer the fused rotation vector; fall back to accelerometer + magnetometer fusion.
         val rotationSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
             ?: sensorManager?.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
         val accelSensor = if (rotationSensor == null) sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) else null
         val magnetSensor = if (rotationSensor == null) sensorManager?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD) else null
+        val sampleGate = HeadingSampleGate()
+        val gravity = FloatArray(3)
+        val geomagnetic = FloatArray(3)
+        val rotationMatrix = FloatArray(9)
+        val displayMatrix = FloatArray(9)
+        var hasGravity = false
+        var hasGeomagnetic = false
+        var accelAccuracy = SensorManager.SENSOR_STATUS_UNRELIABLE
+        var magnetAccuracy = SensorManager.SENSOR_STATUS_UNRELIABLE
+
+        fun clearCompass() {
+            compassReading = null
+            sampleGate.reset()
+            hasGravity = false
+            hasGeomagnetic = false
+            accelAccuracy = SensorManager.SENSOR_STATUS_UNRELIABLE
+            magnetAccuracy = SensorManager.SENSOR_STATUS_UNRELIABLE
+        }
 
         val compassListener = object : SensorEventListener {
-            private val rotationMatrix = FloatArray(9)
-            private val displayRotationMatrix = FloatArray(9)
-            private val orientationValues = FloatArray(3)
-            private val gravity = FloatArray(3)
-            private val geomagnetic = FloatArray(3)
-            private var hasGravity = false
-            private var hasGeomagnetic = false
-            private var lastHeadingTimestampNs = 0L
-
-            private fun trueNorthAzimuth(matrix: FloatArray): Float? {
-                @Suppress("DEPRECATION")
-                val displayRotation = windowManager?.defaultDisplay?.rotation ?: Surface.ROTATION_0
-                val (axisX, axisY) = when (displayRotation) {
-                    Surface.ROTATION_90 -> SensorManager.AXIS_Y to SensorManager.AXIS_MINUS_X
-                    Surface.ROTATION_180 -> SensorManager.AXIS_MINUS_X to SensorManager.AXIS_MINUS_Y
-                    Surface.ROTATION_270 -> SensorManager.AXIS_MINUS_Y to SensorManager.AXIS_X
-                    else -> SensorManager.AXIS_X to SensorManager.AXIS_Y
-                }
-
-                if (!SensorManager.remapCoordinateSystem(matrix, axisX, axisY, displayRotationMatrix)) {
-                    return null
-                }
-                SensorManager.getOrientation(displayRotationMatrix, orientationValues)
-                val magneticAzimuth = Math.toDegrees(orientationValues[0].toDouble()).toFloat()
-
-                // Android's orientation is magnetic-north referenced. Correct it so the map,
-                // marker, and north pip all use the same true-north reference.
-                val referenceLat = phoneLat ?: scooterReference?.latitude ?: 0.0
-                val referenceLng = phoneLng ?: scooterReference?.longitude ?: 0.0
-                val declination = GeomagneticField(
-                    referenceLat.toFloat(),
-                    referenceLng.toFloat(),
-                    (atherAlt ?: 0.0).toFloat(),
-                    System.currentTimeMillis()
-                ).declination
-                return (magneticAzimuth + declination + 360f) % 360f
-            }
-
-            private fun applyHeading(rawDeg: Float, timestampNs: Long, deadbandDeg: Float) {
-                if (!hasInitAzimuth) {
-                    unwrappedAzimuth = rawDeg
-                    hasInitAzimuth = true
-                    lastHeadingTimestampNs = timestampNs
-                } else {
-                    val normCurrent = (unwrappedAzimuth % 360f + 360f) % 360f
-                    val diff = (rawDeg - normCurrent + 540f) % 360f - 180f
-                    val enoughTimeElapsed = timestampNs - lastHeadingTimestampNs >= 33_000_000L
-                    if (kotlin.math.abs(diff) >= deadbandDeg && enoughTimeElapsed) {
-                        unwrappedAzimuth += diff
-                        lastHeadingTimestampNs = timestampNs
-                    }
-                }
-                azimuthDegrees = (unwrappedAzimuth % 360f + 360f) % 360f
-            }
-
             override fun onSensorChanged(event: SensorEvent?) {
                 if (event == null) return
-                var rawDeg: Float? = null
-
-                if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR ||
-                    event.sensor.type == Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR) {
+                val type = event.sensor.type
+                val vector = type == Sensor.TYPE_ROTATION_VECTOR || type == Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR
+                if (!vector && type != Sensor.TYPE_ACCELEROMETER && type != Sensor.TYPE_MAGNETIC_FIELD) return
+                if (event.values.size < 3 || (0..2).any { !event.values[it].isFinite() }) {
+                    compassReading = null
+                    return
+                }
+                val accuracy: Int
+                val headingError: Float?
+                if (vector) {
+                    accuracy = event.accuracy
+                    headingError = CompassHeading.headingErrorDegrees(event.values)
                     SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-                    rawDeg = trueNorthAzimuth(rotationMatrix)
-                } else if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-                    gravity[0] = 0.8f * gravity[0] + 0.2f * event.values[0]
-                    gravity[1] = 0.8f * gravity[1] + 0.2f * event.values[1]
-                    gravity[2] = 0.8f * gravity[2] + 0.2f * event.values[2]
-                    hasGravity = true
-                    if (hasGeomagnetic) {
-                        val r = FloatArray(9)
-                        val i = FloatArray(9)
-                        if (SensorManager.getRotationMatrix(r, i, gravity, geomagnetic)) {
-                            rawDeg = trueNorthAzimuth(r)
-                        }
+                } else {
+                    val target = if (type == Sensor.TYPE_ACCELEROMETER) gravity else geomagnetic
+                    val initialized = if (type == Sensor.TYPE_ACCELEROMETER) hasGravity else hasGeomagnetic
+                    for (index in 0..2) {
+                        target[index] = if (initialized) 0.8f * target[index] + 0.2f * event.values[index]
+                            else event.values[index]
                     }
-                } else if (event.sensor.type == Sensor.TYPE_MAGNETIC_FIELD) {
-                    geomagnetic[0] = 0.8f * geomagnetic[0] + 0.2f * event.values[0]
-                    geomagnetic[1] = 0.8f * geomagnetic[1] + 0.2f * event.values[1]
-                    geomagnetic[2] = 0.8f * geomagnetic[2] + 0.2f * event.values[2]
-                    hasGeomagnetic = true
-                    if (hasGravity) {
-                        val r = FloatArray(9)
-                        val i = FloatArray(9)
-                        if (SensorManager.getRotationMatrix(r, i, gravity, geomagnetic)) {
-                            rawDeg = trueNorthAzimuth(r)
-                        }
+                    if (type == Sensor.TYPE_ACCELEROMETER) {
+                        hasGravity = true
+                        accelAccuracy = event.accuracy
+                    } else {
+                        hasGeomagnetic = true
+                        magnetAccuracy = event.accuracy
+                    }
+                    if (!hasGravity || !hasGeomagnetic) return
+                    accuracy = minOf(accelAccuracy, magnetAccuracy)
+                    headingError = null
+                    if (!SensorManager.getRotationMatrix(rotationMatrix, null, gravity, geomagnetic)) {
+                        compassReading = null
+                        return
                     }
                 }
 
-                if (rawDeg != null) {
-                    // Recalibrate: keep a running circular mean every sample (not after N).
-                    if (isRecalibrating) {
-                        calibAccum.ensureToken(recalibrateToken)
-                        val rad = Math.toRadians(rawDeg.toDouble())
-                        calibAccum.sinSum += sin(rad)
-                        calibAccum.cosSum += cos(rad)
-                        calibAccum.count += 1
-                        calibAccum.meanDegreesOrNull()?.let { locked ->
-                            unwrappedAzimuth = locked
-                            azimuthDegrees = locked
-                            hasInitAzimuth = true
-                            lastHeadingTimestampNs = event.timestamp
-                        }
-                        return
-                    }
-
-                    // Only freeze on truly unreliable readings (LOW is common indoors).
-                    if (compassAccuracy == SensorManager.SENSOR_STATUS_UNRELIABLE) {
-                        return
-                    }
-
-                    applyHeading(rawDeg, event.timestamp, deadbandDeg = 1.25f)
+                @Suppress("DEPRECATION")
+                val displayRotation = windowManager?.defaultDisplay?.rotation ?: DisplaySurface.ROTATION_0
+                val (axisX, axisY) = when (displayRotation) {
+                    DisplaySurface.ROTATION_90 -> SensorManager.AXIS_Y to SensorManager.AXIS_MINUS_X
+                    DisplaySurface.ROTATION_180 -> SensorManager.AXIS_MINUS_X to SensorManager.AXIS_MINUS_Y
+                    DisplaySurface.ROTATION_270 -> SensorManager.AXIS_MINUS_Y to SensorManager.AXIS_X
+                    else -> SensorManager.AXIS_X to SensorManager.AXIS_Y
+                }
+                val magnetic = if (SensorManager.remapCoordinateSystem(rotationMatrix, axisX, axisY, displayMatrix)) {
+                    CompassHeading.magneticAzimuth(displayMatrix)
+                } else null
+                // Publish loss of accuracy immediately; throttle only usable heading samples.
+                if (accuracy <= 0 || magnetic == null || sampleGate.shouldPublish(event.timestamp)) {
+                    compassReading = CompassReading(magnetic, accuracy, headingError, event.timestamp)
                 }
             }
 
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-                if (sensor == null) return
-                val type = sensor.type
-                if (type == Sensor.TYPE_MAGNETIC_FIELD ||
-                    type == Sensor.TYPE_ROTATION_VECTOR ||
-                    type == Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR
-                ) {
-                    compassAccuracy = accuracy
-                }
+                if (accuracy <= SensorManager.SENSOR_STATUS_UNRELIABLE) compassReading = null
             }
         }
 
         fun startCompass() {
             sensorManager?.unregisterListener(compassListener)
-            if (rotationSensor != null && sensorManager != null) {
-                sensorManager.registerListener(compassListener, rotationSensor, SensorManager.SENSOR_DELAY_UI)
-            } else if (sensorManager != null) {
-                if (accelSensor != null) sensorManager.registerListener(compassListener, accelSensor, SensorManager.SENSOR_DELAY_UI)
-                if (magnetSensor != null) sensorManager.registerListener(compassListener, magnetSensor, SensorManager.SENSOR_DELAY_UI)
-            }
+            clearCompass()
+            compassAvailable = if (rotationSensor != null && sensorManager != null) {
+                sensorManager.registerListener(compassListener, rotationSensor, SensorManager.SENSOR_DELAY_GAME)
+            } else if (sensorManager != null && accelSensor != null && magnetSensor != null) {
+                val accelRegistered = sensorManager.registerListener(compassListener, accelSensor, SensorManager.SENSOR_DELAY_GAME)
+                val magnetRegistered = sensorManager.registerListener(compassListener, magnetSensor, SensorManager.SENSOR_DELAY_GAME)
+                if (!accelRegistered || !magnetRegistered) sensorManager.unregisterListener(compassListener)
+                accelRegistered && magnetRegistered
+            } else false
         }
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) startCompass()
-            if (event == Lifecycle.Event.ON_PAUSE) sensorManager?.unregisterListener(compassListener)
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                sensorManager?.unregisterListener(compassListener)
+                clearCompass()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) startCompass()
@@ -338,19 +298,14 @@ fun MapSection(
         var subscribed = false
 
         fun clearPhoneFix() {
-            phoneLat = null
-            phoneLng = null
-            phoneAcc = null
-
+            phoneLocation = null
         }
 
         fun applyFix(location: Location) {
-            if (!location.latitude.isFinite() || !location.longitude.isFinite()) return
-            val age = (SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000L
-            if (age !in 0L..120_000L) return
-            phoneLat = location.latitude
-            phoneLng = location.longitude
-            phoneAcc = location.accuracy
+            if (!CompassHeading.validCoordinates(location.latitude, location.longitude)) return
+            if (!CompassHeading.isFresh(location.elapsedRealtimeNanos, SystemClock.elapsedRealtimeNanos(),
+                    CompassHeading.LOCATION_MAX_AGE_NS)) return
+            phoneLocation = Location(location)
         }
 
         lateinit var refreshSubscription: () -> Unit
@@ -402,7 +357,8 @@ fun MapSection(
                     for (provider in providers) {
                         val enabled = runCatching { locationManager.isProviderEnabled(provider) }.getOrDefault(false)
                         if (!enabled) continue
-                        locationManager.requestLocationUpdates(provider, 1_000L, 1f, locationListener)
+                        // Refresh fix age even while stationary; heading needs a current phone reference.
+                        locationManager.requestLocationUpdates(provider, 1_000L, 0f, locationListener)
                         subscribed = true
                         val last = runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
                         val age = last?.let { (SystemClock.elapsedRealtimeNanos() - it.elapsedRealtimeNanos) / 1_000_000L }
@@ -481,60 +437,14 @@ fun MapSection(
         )
     }
 
-    // Manual recalibrate only — auto-run on open was locking a bad heading and putting N wrong.
-    LaunchedEffect(recalibrateToken) {
-        if (recalibrateToken == 0) return@LaunchedEffect
-        calibAccum.reset(recalibrateToken)
-        isRecalibrating = true
-        webViewInstance?.evaluateJavascript(
-            "if (window.setHeadingFrozen) { window.setHeadingFrozen(true); }",
-            null
-        )
-        delay(1_500L)
-        val locked = calibAccum.meanDegreesOrNull()
-        if (locked != null && calibAccum.count >= 5) {
-            unwrappedAzimuth = locked
-            azimuthDegrees = locked
-            hasInitAzimuth = true
-        }
-        isRecalibrating = false
-        webViewInstance?.evaluateJavascript(
-            "if (window.setHeadingFrozen) { window.setHeadingFrozen(false); }",
-            null
-        )
-        if (pageLoaded && webViewInstance != null) {
-            val jsHeading = String.format(
-                Locale.US,
-                "if (window.setMapHeading) { window.setMapHeading(%.2f); }",
-                azimuthDegrees
-            )
-            webViewInstance?.evaluateJavascript(jsHeading, null)
-        }
+    // Heading is the sole orientation source; GPS marker updates only carry position.
+    LaunchedEffect(azimuthDegrees, pageLoaded, webViewInstance) {
+        if (!pageLoaded) return@LaunchedEffect
+        val heading = azimuthDegrees?.let { String.format(Locale.US, "%.4f", it) } ?: "null"
+        webViewInstance?.evaluateJavascript("if (window.setMapHeading) { window.setMapHeading($heading); }", null)
     }
 
-    LaunchedEffect(isRecalibrating, pageLoaded, webViewInstance) {
-        if (!pageLoaded || webViewInstance == null) return@LaunchedEffect
-        val frozen = if (isRecalibrating) "true" else "false"
-        webViewInstance?.evaluateJavascript(
-            "if (window.setHeadingFrozen) { window.setHeadingFrozen($frozen); }",
-            null
-        )
-    }
-
-    // Heading updates are isolated from GPS marker updates. Sensor events can arrive at
-    // 30 Hz; re-sending every marker on each event made active map gestures stutter.
-    LaunchedEffect(azimuthDegrees, pageLoaded, isRecalibrating) {
-        if (pageLoaded && webViewInstance != null && !isRecalibrating) {
-            val jsHeading = String.format(
-                Locale.US,
-                "if (window.setMapHeading) { window.setMapHeading(%.2f); }",
-                azimuthDegrees
-            )
-            webViewInstance?.evaluateJavascript(jsHeading, null)
-        }
-    }
-
-    LaunchedEffect(atherLat, atherLng, atherAcc, phoneLat, phoneLng, phoneAcc, pageLoaded) {
+    LaunchedEffect(atherLat, atherLng, atherAcc, phoneLat, phoneLng, phoneAcc, pageLoaded, webViewInstance) {
         val view = webViewInstance ?: return@LaunchedEffect
         if (!pageLoaded) return@LaunchedEffect
 
@@ -557,11 +467,10 @@ fun MapSection(
         if (phoneLat != null && phoneLng != null) {
             val jsPhone = String.format(
                 Locale.US,
-                "if (window.updatePhoneMarker) { window.updatePhoneMarker(%.6f, %.6f, %.1f, %.1f); }",
+                "if (window.updatePhoneMarker) { window.updatePhoneMarker(%.6f, %.6f, %.1f); }",
                 phoneLat!!,
                 phoneLng!!,
-                phoneAcc ?: 0.0f,
-                azimuthDegrees
+                phoneAcc ?: 0.0f
             )
             view.evaluateJavascript(jsPhone, null)
 
@@ -571,6 +480,17 @@ fun MapSection(
                 null
             )
         }
+    }
+
+    if (showCompassHelp) {
+        AlertDialog(
+            onDismissRequest = { showCompassHelp = false },
+            title = { Text("Improve compass accuracy") },
+            text = { Text("Move away from magnetic mounts, metal, and the scooter. Slowly move your phone " +
+                "in a figure eight, then hold it fairly flat and check the compass accuracy below the map. " +
+                "This map uses true north, which can differ from a compass set to magnetic north.") },
+            confirmButton = { TextButton(onClick = { showCompassHelp = false }) { Text("Got it") } }
+        )
     }
 
     Card(
@@ -605,7 +525,7 @@ fun MapSection(
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        text = if (mapMode == "heading") "HEADING UP" else "NORTH UP",
+                        text = if (mapMode == "heading" && azimuthDegrees != null) "HEADING UP" else "NORTH UP",
                         color = colorScheme.secondary,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
@@ -740,22 +660,19 @@ fun MapSection(
                         shadowElevation = 4.dp
                     ) {
                         IconButton(
-                            onClick = { recalibrateToken += 1 },
+                            onClick = { showCompassHelp = true },
                             modifier = Modifier
                                 .size(48.dp)
                                 .semantics {
-                                    contentDescription = "Recalibrate compass. Hold phone still for a few seconds"
+                                    contentDescription = "Improve compass accuracy"
                                 }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Explore,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
-                                tint = if (isRecalibrating) {
-                                    colorScheme.secondary
-                                } else {
-                                    colorScheme.onSurface
-                                }
+                                tint = if (azimuthDegrees == null || freshReading?.accuracy == SensorManager.SENSOR_STATUS_ACCURACY_LOW)
+                                    colorScheme.error else colorScheme.onSurface
                             )
                         }
                     }
@@ -772,18 +689,14 @@ fun MapSection(
                 }
             )
 
-            if (isRecalibrating) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "Hold still — calibrating compass…",
-                    color = colorScheme.secondary,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = compassStatus,
+                color = if (azimuthDegrees == null || freshReading?.accuracy == SensorManager.SENSOR_STATUS_ACCURACY_LOW)
+                    colorScheme.error else colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.fillMaxWidth().clickable { showCompassHelp = true }
+            )
 
             if (!hasLocationPermission || !locationServicesOn) {
                 Spacer(Modifier.height(6.dp))

@@ -3,7 +3,7 @@
 
   let map, tiles, scooter, scooterAccuracy, phone, phoneAccuracy, guidance;
   let pendingScooter, pendingPhone;
-  let heading = 0, phoneHeading = 0, headingFrozen = false;
+  let heading = null, headingFrozen = false;
   let headingMode = 'heading', followTarget = 'phone';
   let interacting = false, browsing = false, firstCenter = true;
   let resumeTimer = null;
@@ -23,9 +23,14 @@
     const bearing = map.getBearing();
     document.getElementById('north-ring').style.transform = `rotate(${bearing}deg)`;
     const arrow = document.getElementById('phone-marker-icon');
-    if (arrow) arrow.style.transform = `rotate(${normalize(phoneHeading + bearing)}deg)`;
+    if (arrow) {
+      arrow.style.transform = `rotate(${heading === null ? 0 : normalize(heading + bearing)}deg)`;
+      arrow.querySelector('.phone-arrow').hidden = heading === null;
+      arrow.classList.toggle('heading-unavailable', heading === null);
+    }
     document.getElementById('camera-status').textContent = browsing ? 'Browsing · tap Follow' :
-      (followTarget === 'scooter' ? 'Following scooter' : (headingMode === 'north' ? 'North up' : 'Heading up'));
+      (followTarget === 'scooter' ? 'Following scooter' :
+        (headingMode === 'north' ? 'North up' : (heading === null ? 'North up · compass unavailable' : 'Heading up')));
     document.getElementById('empty-status').hidden = !!(phone || scooter);
   }
 
@@ -41,14 +46,15 @@
       lastHeadingTime = null;
       return;
     }
-    const target = headingMode === 'north' ? 0 : normalize(-heading);
+    const target = headingMode === 'north' || heading === null ? 0 : normalize(-heading);
     const current = normalize(map.getBearing());
     const delta = shortestAngle(current, target);
     // Time-based easing gives the same response at 60, 90, 120 and 144 Hz.
     const elapsed = lastHeadingTime === null ? 1000 / 60 : Math.min(time - lastHeadingTime, 50);
     lastHeadingTime = time;
-    const finished = reducedMotion.matches || Math.abs(delta) < 0.1;
-    map.setBearing(finished ? target : normalize(current + delta * (1 - Math.exp(-elapsed / 55))));
+    // A single short smoothing stage follows the fused sensor without an angular cutoff.
+    const finished = reducedMotion.matches || Math.abs(delta) < 0.02;
+    map.setBearing(finished ? target : normalize(current + delta * (1 - Math.exp(-elapsed / 20))));
     if (!finished) headingFrame = requestAnimationFrame(animateHeading);
     else lastHeadingTime = null;
   }
@@ -114,9 +120,7 @@
   };
 
   window.setMapHeading = function (value) {
-    if (!finite(value)) return;
-    heading = normalize(Number(value));
-    phoneHeading = heading;
+    heading = finite(value) ? normalize(Number(value)) : null;
     updateOrientation();
     updateHeading();
   };
@@ -174,10 +178,9 @@
     updateOrientation();
   };
 
-  window.updatePhoneMarker = function (lat, lng, accuracy, bearing) {
+  window.updatePhoneMarker = function (lat, lng, accuracy) {
     if (!validPosition(lat, lng)) return;
-    if (!map) { pendingPhone = [lat, lng, accuracy, bearing]; return; }
-    if (finite(bearing)) phoneHeading = normalize(Number(bearing));
+    if (!map) { pendingPhone = [lat, lng, accuracy]; return; }
     const position = [Number(lat), Number(lng)];
     if (!phone) {
       const icon = L.divIcon({

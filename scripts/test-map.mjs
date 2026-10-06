@@ -97,6 +97,9 @@ try {
   await until('!!window.testMap && !!window.setMapHeading');
   assert.equal(await evaluate('document.getElementById("empty-status").hidden'), false);
   await evaluate('updateAtherMarker(12.970,77.590,5); updatePhoneMarker(12.971,77.591,8,0);');
+  assert.equal(await evaluate('document.querySelector("#phone-marker-icon .phone-arrow").hidden'), true);
+  assert.match(await evaluate('document.getElementById("camera-status").textContent'), /North up/);
+  console.log('PASS: no compass reading keeps north up and shows a position dot');
   await until('!document.getElementById("tile-status").hidden');
   failTiles = false;
   await evaluate('retryMapTiles()');
@@ -110,6 +113,72 @@ try {
   const northPoint = await evaluate('testMap.latLngToContainerPoint([12.972,77.591])');
   assert.ok(northPoint.x < 200, 'When facing east, north should be left');
   console.log('PASS: east-facing map puts north left and the phone arrow up');
+
+  await evaluate('updatePhoneMarker(12.971,77.591,8,180)');
+  assert.equal(await evaluate('document.getElementById("phone-marker-icon").style.transform'), 'rotate(0deg)');
+  await evaluate('setMapHeading(null)');
+  await until('testMap.getBearing() === 0');
+  assert.equal(await evaluate('document.querySelector("#phone-marker-icon .phone-arrow").hidden'), true);
+  await evaluate('setMapHeading(90)');
+  await until('testMap.getBearing() === 270');
+  assert.equal(await evaluate('document.querySelector("#phone-marker-icon .phone-arrow").hidden'), false);
+  console.log('PASS: GPS cannot overwrite heading; unavailable compass falls back and recovers');
+
+  await evaluate('setMapHeading(0)');
+  await until('testMap.getBearing() === 0');
+  for (const smallHeading of [0.4, 0.8, 1.2]) {
+    await evaluate(`setMapHeading(${smallHeading})`);
+    await until(`Math.abs(testMap.getBearing() - ${360 - smallHeading}) < 0.00001`);
+  }
+  await evaluate('setMapHeading(90)');
+  await until('testMap.getBearing() === 270');
+  console.log('PASS: sub-degree heading changes settle without a permanent offset');
+
+  await evaluate('setMapHeading(0)');
+  await until('testMap.getBearing() === 0');
+  // Drive the production animation with deterministic frames and 50 Hz sensor updates.
+  const refreshResults = await evaluate(`(() => {
+    const originalRequest = window.requestAnimationFrame;
+    const originalCancel = window.cancelAnimationFrame;
+    const frames = new Map();
+    let nextFrame = 1;
+    window.requestAnimationFrame = callback => { const id = nextFrame++; frames.set(id, callback); return id; };
+    window.cancelAnimationFrame = id => frames.delete(id);
+    function frame(time) {
+      const callbacks = [...frames.values()]; frames.clear();
+      callbacks.forEach(callback => callback(time));
+    }
+    const results = [];
+    try {
+      for (const hz of [60, 90, 120, 144]) {
+        const dt = 1000 / hz;
+        setMapHeading(0);
+        for (let i = 0; i < hz; i++) frame(i * dt);
+        let lastSample = -1, maxLag = 0;
+        for (let i = 1; i <= hz; i++) {
+          const time = 1000 + i * dt;
+          const sensorTime = Math.floor(i * dt / 20) * 20;
+          if (sensorTime !== lastSample) { setMapHeading(sensorTime * 0.09); lastSample = sensorTime; }
+          frame(time);
+          const shown = (360 - testMap.getBearing()) % 360;
+          const lag = Math.abs(((i * dt * 0.09 - shown + 540) % 360) - 180);
+          maxLag = Math.max(maxLag, lag);
+        }
+        setMapHeading(90);
+        for (let i = 1; i <= hz; i++) frame(2000 + i * dt);
+        results.push({ hz, maxLag, settled: testMap.getBearing() });
+      }
+      return results;
+    } finally {
+      window.requestAnimationFrame = originalRequest;
+      window.cancelAnimationFrame = originalCancel;
+    }
+  })()`);
+  for (const result of refreshResults) {
+    assert.ok(result.maxLag < 3, `Rotation lag exceeded 3 degrees at ${result.hz} Hz: ${result.maxLag}`);
+    assert.equal(result.settled, 270, `Heading did not settle at ${result.hz} Hz`);
+  }
+  console.log('PASS: 60/90/120/144 Hz animations stay below 3 degrees lag at 90 degrees/s and settle exactly');
 
   const beforeTheme = await evaluate('({center:testMap.getCenter(), zoom:testMap.getZoom(), bearing:testMap.getBearing()})');
   for (const theme of ['day', 'neon', 'night']) {
