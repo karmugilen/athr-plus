@@ -335,15 +335,18 @@ data class ScooterDashboardState(
     val vehicleProfile: VehicleProfile? = null,
     val remoteChargingCommand: RemoteChargingCommand = RemoteChargingCommand()
 ) {
-    /** Detected scooter wins for range and ride modes. The saved choice remains only when the profile cannot name a model. */
+    /** Detected scooter wins for range, ride modes, and pack size. The saved choice remains only when the profile cannot name a model. */
     val modelForRange: ScooterModel
         get() = vehicleProfile?.resolvedModel ?: settings.selectedModel
+
+    val usablePackWh: Double
+        get() = modelForRange.usableCapacityWh
 
     val costToFullCharge: ChargeCostEstimate
         get() {
             val soc = telemetry?.batterySoc ?: 0.0
             val neededPercent = (100.0 - soc).coerceIn(0.0, 100.0)
-            val usableKWh = settings.selectedModel.usableCapacityWh / 1000.0
+            val usableKWh = usablePackWh / 1000.0
             val energyNeededKWh = (neededPercent / 100.0) * usableKWh
             val costInr = energyNeededKWh * settings.tariffRatePerKWh
             return ChargeCostEstimate(

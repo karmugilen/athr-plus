@@ -5,13 +5,14 @@ import io.ather.pro.data.api.AtherApiClient
 import io.ather.pro.data.api.AtherCloudApi
 import io.ather.pro.data.charging.ChargeLimitStore
 import io.ather.pro.data.local.DashboardLocalStore
+import io.ather.pro.data.local.SavedScooterReading
+import io.ather.pro.data.local.SavedScooterReadingPrefs
+import io.ather.pro.data.local.SavedScooterReadingStore
 import io.ather.pro.data.local.TripBaseline
 import io.ather.pro.domain.charging.ChargingEvidence
 import io.ather.pro.domain.charging.ChargeLimitController
+import io.ather.pro.domain.charging.ChargeLimitSession
 import io.ather.pro.domain.charging.ChargeSnapshotRefresh
-import io.ather.pro.domain.charging.ChargeRateMemory
-import io.ather.pro.domain.charging.ChargingRateTracker
-import io.ather.pro.domain.charging.EstimatedChargeCutoff
 import io.ather.pro.domain.battery.BatteryHistory
 import io.ather.pro.domain.battery.RideHistory
 import io.ather.pro.domain.charging.ChargingControl
@@ -26,6 +27,7 @@ import io.ather.pro.domain.model.ScooterSettings
 import io.ather.pro.domain.model.ScooterTelemetry
 import io.ather.pro.domain.model.TripRecord
 import io.ather.pro.domain.repository.ScooterRepository
+import io.ather.pro.domain.ride.RideLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -42,19 +44,21 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import java.util.concurrent.Executors
 import okhttp3.WebSocket
 import java.util.UUID
-import kotlin.math.roundToInt
 
 class AtherRepository(
     context: Context? = null,
     remoteChargingGateway: RemoteChargingGateway? = null,
     private val api: AtherCloudApi = AtherApiClient(),
     repositoryScope: CoroutineScope? = null,
-    private val clock: () -> Long = { System.currentTimeMillis() }
+    private val clock: () -> Long = { System.currentTimeMillis() },
+    savedReadingStore: SavedScooterReadingStore? = null
 ) : ScooterRepository {
     private val appContext = context?.applicationContext
     private val localStore: DashboardLocalStore? by lazy { appContext?.let(::DashboardLocalStore) }
     private val preferences = appContext?.getSharedPreferences("ather_dashboard_settings", Context.MODE_PRIVATE)
     private val chargeLimitStore: ChargeLimitStore? = appContext?.let(::ChargeLimitStore)
+    private val savedReadings: SavedScooterReadingStore? = savedReadingStore ?: appContext?.let { SavedScooterReadingPrefs(it, clock) }
+    private var lastReadingSaveAt = 0L
     private val chargingDispatcher = RemoteChargingDispatcher(
         gateway = remoteChargingGateway ?: api.asRemoteChargingGateway(),
         nowMs = clock
@@ -74,7 +78,7 @@ class AtherRepository(
     private var lastSavedTimestamp: Long = clock()
     private var lastHistoryPersistAt = 0L
     private var evidence = ChargingEvidence()
-    private val chargeRate = ChargingRateTracker()
+    private val chargeSession = ChargeLimitSession()
     @Volatile private var generation = 0L
     private var reconnectAttempt = 0
     @Volatile private var snapshotConnectedAt: Long? = null
@@ -153,11 +157,14 @@ class AtherRepository(
         if (changed) {
             generation += 1
             evidence = ChargingEvidence()
-            chargeRate.reset()
-            _dashboard.update { it.copy(telemetry = null, lastUpdated = null, batteryUpdatedAt = null,
-                chargingUpdatedAt = null, batteryReportedAt = null, chargingRatePercentPerMinute = null,
-                chargingRateMinutes = 0.0,
-                remoteChargingCommand = RemoteChargingCommand()) }
+            chargeSession.resetRate()
+            _dashboard.update {
+                val cleared = it.copy(telemetry = null, lastUpdated = null, batteryUpdatedAt = null,
+                    chargingUpdatedAt = null, batteryReportedAt = null, chargingRatePercentPerMinute = null,
+                    chargingRateMinutes = 0.0, gpsUpdatedAt = null,
+                    remoteChargingCommand = RemoteChargingCommand())
+                dashboardWithSavedReading(cleared, uuid)
+            }
             loadChargeLimitForVehicle(uuid)
         }
         if (changed || socket == null) {
@@ -170,7 +177,7 @@ class AtherRepository(
     fun clearCredentials() {
         generation += 1
         evidence = ChargingEvidence()
-        chargeRate.reset()
+        chargeSession.resetRate()
         authToken = null
         vehicleUuid = null
         manuallyDisconnected = true
@@ -265,17 +272,15 @@ class AtherRepository(
 
     private fun loadOfficialRides(scooterId: String) {
         val (token, _) = requireCredentials() ?: return
-        val settings = _dashboard.value.settings
-        api.fetchRides(
-            token = token,
-            scooterId = scooterId,
-            usableCapacityWh = settings.selectedModel.usableCapacityWh,
-            tariffRatePerKWh = settings.tariffRatePerKWh
-        ) { result ->
+        api.fetchRides(token = token, scooterId = scooterId) { result ->
             scope.launch {
                 storageReady.await()
                 if (authToken != token) return@launch
-                result.onSuccess { officialRides ->
+                result.onSuccess { mapped ->
+                    val priced = _dashboard.value
+                    val officialRides = mapped.map { fields ->
+                        RideLog.fromCloud(fields, priced.modelForRange.usableCapacityWh, priced.settings.tariffRatePerKWh)
+                    }
                     val localRides = _dashboard.value.recentTrips.filterNot { it.isOfficialRide }
                     val merged = (officialRides + localRides).distinctBy(TripRecord::id)
                         .sortedByDescending(TripRecord::startTimeMs).take(100)
@@ -355,7 +360,8 @@ class AtherRepository(
         val mergedTelemetry = existingTelemetry?.mergeWith(rawTelemetry) ?: rawTelemetry
 
         val currentSettings = _dashboard.value.settings
-        val usableCapacityWh = currentSettings.selectedModel.usableCapacityWh
+        val pack = _dashboard.value.modelForRange
+        val usableCapacityWh = pack.usableCapacityWh
 
         // 1. Calculate Mode Efficiencies (Algorithm A)
         val soc = mergedTelemetry.batterySoc ?: 0.0
@@ -380,7 +386,7 @@ class AtherRepository(
         val avgWhPerKm = when {
             rideEff != null && rideEff > 0.0 -> rideEff
             smartEcoEff != null && smartEcoEff > 0.0 -> smartEcoEff
-            else -> usableCapacityWh / currentSettings.selectedModel.referenceCycleRangeKm
+            else -> usableCapacityWh / pack.referenceCycleRangeKm
         }
 
         // Ather's available properties/telemetry endpoints do not provide battery SoH.
@@ -400,65 +406,33 @@ class AtherRepository(
         val currentOdo = fullTelemetry.odoKm
         val currentBatterySoc = fullTelemetry.batterySoc
         if (previousOdo != null && previousSoc != null && currentOdo != null && currentBatterySoc != null) {
-            val deltaOdo = currentOdo - previousOdo
-            val deltaSoc = previousSoc - currentBatterySoc
-            val vehicleState = fullTelemetry.vehicleState.orEmpty().trim().lowercase()
-            val speedKmh = fullTelemetry.gps?.speed?.takeIf(Double::isFinite) ?: 0.0
-            val isRiding = vehicleState.contains("rid") ||
-                vehicleState.contains("mov") ||
-                speedKmh > 1.0
-            val isParked = vehicleState.contains("park") ||
-                vehicleState.contains("sleep") ||
-                vehicleState.contains("charg") ||
-                vehicleState.contains("standby") ||
-                vehicleState.contains("off")
-
-            val baselineInvalid = deltaOdo < -0.05 ||
-                deltaSoc < -0.5 ||
-                fullTelemetry.charging == true
-
-            if (baselineInvalid) {
-                updateTripBaseline(currentOdo, currentBatterySoc, now)
-            } else if (deltaOdo >= 0.15 && (isParked || (!isRiding && deltaSoc >= 0.1))) {
-                val rangeEstimatedEnergyWh = deltaOdo * avgWhPerKm.coerceIn(8.0, 120.0)
-                val socEstimatedEnergyWh = deltaSoc.coerceAtLeast(0.0) * (usableCapacityWh / 100.0)
-                val socEfficiency = if (deltaOdo > 0.0) socEstimatedEnergyWh / deltaOdo else 0.0
-                val energyWh = if (deltaSoc >= 0.25 && socEfficiency in 8.0..120.0) {
-                    socEstimatedEnergyWh
-                } else {
-                    rangeEstimatedEnergyWh
+            when (val leg = RideLog.close(
+                RideLog.Leg(
+                    previousOdoKm = previousOdo,
+                    previousSoc = previousSoc,
+                    openedAtMs = lastSavedTimestamp,
+                    odoKm = currentOdo,
+                    soc = currentBatterySoc,
+                    nowMs = now,
+                    vehicleState = fullTelemetry.vehicleState.orEmpty(),
+                    speedKmh = fullTelemetry.gps?.speed ?: Double.NaN,
+                    charging = fullTelemetry.charging == true,
+                    avgWhPerKm = avgWhPerKm,
+                    usableCapacityWh = usableCapacityWh,
+                    tariffRatePerKWh = currentSettings.tariffRatePerKWh
+                ),
+                id = UUID.randomUUID().toString()
+            )) {
+                RideLog.LegOutcome.Wait -> Unit
+                is RideLog.LegOutcome.Reset -> updateTripBaseline(leg.odoKm, leg.soc, leg.atMs)
+                is RideLog.LegOutcome.Closed -> {
+                    updatedTrips = (listOf(leg.trip) + updatedTrips).take(100)
+                    persist { saveTrips(updatedTrips) }
+                    updateTripBaseline(leg.odoKm, leg.soc, leg.atMs)
                 }
-                val tripWhPerKm = energyWh / deltaOdo
-                val tripCost = (energyWh / 1000.0) * currentSettings.tariffRatePerKWh
-                val estimatedPackCapacityWh = if (deltaSoc >= 5.0) {
-                    (rangeEstimatedEnergyWh / (deltaSoc / 100.0))
-                        .coerceIn(usableCapacityWh * 0.50, usableCapacityWh * 1.20)
-                } else {
-                    null
-                }
-
-                val newTrip = TripRecord(
-                    id = UUID.randomUUID().toString(),
-                    startTimeMs = lastSavedTimestamp,
-                    endTimeMs = now,
-                    distanceKm = (deltaOdo * 100.0).roundToInt() / 100.0,
-                    socConsumed = (deltaSoc.coerceAtLeast(0.0) * 10.0).roundToInt() / 10.0,
-                    energyConsumedWh = (energyWh * 10.0).roundToInt() / 10.0,
-                    efficiencyWhPerKm = (tripWhPerKm * 10.0).roundToInt() / 10.0,
-                    electricityCostInr = (tripCost * 100.0).roundToInt() / 100.0,
-                    startOdoKm = previousOdo,
-                    endOdoKm = currentOdo,
-                    estimatedPackCapacityWh = estimatedPackCapacityWh
-                )
-
-                updatedTrips = (listOf(newTrip) + updatedTrips).take(100)
-                persist { saveTrips(updatedTrips) }
-                updateTripBaseline(currentOdo, currentBatterySoc, now)
             }
-        } else {
-            if (currentOdo != null && currentBatterySoc != null) {
-                updateTripBaseline(currentOdo, currentBatterySoc, now)
-            }
+        } else if (currentOdo != null && currentBatterySoc != null) {
+            updateTripBaseline(currentOdo, currentBatterySoc, now)
         }
 
         val currentCount = _dashboard.value.packetCount + 1
@@ -480,6 +454,7 @@ class AtherRepository(
             lastHistoryPersistAt = now
         }
 
+        rememberReading(fullTelemetry)
         _dashboard.update {
             val chargeIsNew = evidence.chargingAt?.let { at ->
                 ChargeLimitController.isFresh(at, now) && at > (it.remoteChargingCommand.requestedAt ?: Long.MAX_VALUE)
@@ -534,44 +509,59 @@ class AtherRepository(
         }
     }
 
+    /** A saved reading can paint the screen. Pause waits for a live packet in this process. */
+    private fun dashboardWithSavedReading(state: ScooterDashboardState, uuid: String): ScooterDashboardState {
+        val saved = savedReadings?.load(uuid) ?: return state
+        return state.copy(
+            telemetry = saved.toTelemetry(),
+            lastUpdated = saved.savedAtMs,
+            batteryUpdatedAt = saved.savedAtMs,
+            batteryReportedAt = saved.sourceTimestampMs ?: saved.savedAtMs,
+            gpsUpdatedAt = if (saved.latitude != null && saved.longitude != null) saved.savedAtMs else null
+        )
+    }
+
+    private fun rememberReading(telemetry: ScooterTelemetry) {
+        val store = savedReadings ?: return
+        val uuid = vehicleUuid ?: return
+        val now = clock()
+        if (now - lastReadingSaveAt < 30_000L) return
+        val reading = SavedScooterReading.fromTelemetry(uuid, telemetry, now) ?: return
+        lastReadingSaveAt = now
+        store.save(reading)
+    }
+
     @Synchronized
     private fun processChargeLimit(nowMs: Long) {
         if (!hasCredentials() || manuallyDisconnected) return
+        if (evidence.batteryAt == null && evidence.chargingAt == null) return
         val dashboard = _dashboard.value
         val telemetry = dashboard.telemetry
         val reportedAt = dashboard.batteryReportedAt ?: evidence.batteryAt
-        val finished = chargeRate.observe(telemetry, reportedAt, nowMs)
-        if (dashboard.chargingRatePercentPerMinute != chargeRate.percentPerMinute ||
-            dashboard.chargingRateMinutes != chargeRate.observedMinutes
+        val step = chargeSession.observe(
+            state = _chargeLimit.value,
+            telemetry = telemetry,
+            batteryFreshAtMs = evidence.batteryAt,
+            batteryReportedAtMs = reportedAt,
+            chargingFreshAtMs = evidence.chargingAt,
+            nowMs = nowMs,
+            capacityWh = dashboard.modelForRange.usableCapacityWh
+        )
+        if (dashboard.chargingRatePercentPerMinute != step.liveRate ||
+            dashboard.chargingRateMinutes != step.liveMinutes
         ) {
             _dashboard.update {
                 it.copy(
-                    chargingRatePercentPerMinute = chargeRate.percentPerMinute,
-                    chargingRateMinutes = chargeRate.observedMinutes
+                    chargingRatePercentPerMinute = step.liveRate,
+                    chargingRateMinutes = step.liveMinutes
                 )
             }
         }
-        if (finished != null) {
-            val learned = ChargeRateMemory.remember(_chargeLimit.value, finished)
-            if (learned != _chargeLimit.value && !updateChargeLimit(learned)) return
-        }
-        val limit = _chargeLimit.value
-        val timed = EstimatedChargeCutoff.refresh(limit, telemetry, reportedAt, nowMs,
-            dashboard.settings.selectedModel.usableCapacityWh, chargeRate.percentPerMinute,
-            chargeRate.observedMinutes, limit.learnedPercentPerMinute, limit.learnedMinutes)
-        if (timed != _chargeLimit.value && !updateChargeLimit(timed)) return
-        val measuredDecision = ChargeLimitController.onTelemetry(
-            state = _chargeLimit.value,
-            telemetry = telemetry,
-            lastUpdatedMs = evidence.batteryAt,
-            nowMs = nowMs,
-            chargingUpdatedMs = evidence.chargingAt
-        )
-        val decision = if (measuredDecision == ChargeLimitController.Decision.None)
-            EstimatedChargeCutoff.onDeadline(_chargeLimit.value, telemetry, nowMs)
-            else measuredDecision
+        val decision = step.decision
         when (decision) {
-            ChargeLimitController.Decision.None -> Unit
+            ChargeLimitController.Decision.None -> {
+                if (step.snapshot != _chargeLimit.value) updateChargeLimit(step.snapshot)
+            }
             is ChargeLimitController.Decision.StateOnly -> {
                 updateChargeLimit(decision.next)
             }
@@ -700,7 +690,7 @@ class AtherRepository(
 
     private fun invalidateChargeEstimateAfterManualCommand(requestedAt: Long) {
         scope.launch {
-            chargeRate.reset()
+            chargeSession.resetRate()
             val state = _chargeLimit.value
             updateChargeLimit(state.copy(estimate = null,
                 estimateBlockedThroughMs = maxOf(state.estimateBlockedThroughMs ?: 0L, requestedAt)))

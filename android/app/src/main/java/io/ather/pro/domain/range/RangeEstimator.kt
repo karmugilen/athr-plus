@@ -37,7 +37,7 @@ object RangeEstimator {
             return listOf(RideModeRange(active.displayName, currentRange, true))
         }
         return if (currentRange != null && activeRange != null) ranges.mapNotNull { mode ->
-            valid(io.ather.pro.domain.computation.TelemetryComputation.requireEngine().scaleRange(currentRange, mode.km, activeRange))?.let { mode.copy(km = it) }
+            valid(io.ather.pro.domain.computation.TelemetryComputation.engine().scaleRange(currentRange, mode.km, activeRange))?.let { mode.copy(km = it) }
         } else ranges
     }
 
@@ -48,7 +48,7 @@ object RangeEstimator {
         val soc = telemetry?.batterySoc?.takeIf { it.isFinite() && it in 0.0..100.0 } ?: return null
         if (!capacityWh.isFinite() || capacityWh <= 0 || !tariff.isFinite() || tariff < 0) return null
         val percent = target.coerceIn(0, 100).toDouble()
-        val values = io.ather.pro.domain.computation.TelemetryComputation.requireEngine().chargeEstimate(
+        val values = io.ather.pro.domain.computation.TelemetryComputation.engine().chargeEstimate(
             soc, percent, capacityWh, tariff, current(telemetry, model) ?: Double.NaN,
             telemetry.timeToEightyChargeMin ?: Double.NaN, telemetry.timeToFullChargeMin ?: Double.NaN)
         return ChargeTargetEstimate(values[0], values[1], values[2], valid(values[3]), valid(values[4]))

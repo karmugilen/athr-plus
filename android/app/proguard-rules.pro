@@ -1,6 +1,11 @@
 # JSON keys in saved preferences must remain readable across debug/release updates.
 # Only reflected persistence models are retained; UI and other app code remain optimizable.
 -keepattributes Signature,InnerClasses,EnclosingMethod,*Annotation*
+-keep class io.ather.pro.data.local.SavedScooterReading { *; }
+-keep class io.ather.pro.domain.model.ModeRange { *; }
+-keep class io.ather.pro.domain.chargingmap.ChargerLocation { *; }
+-keep class io.ather.pro.domain.chargingmap.ChargerConnector { *; }
+-keep class io.ather.pro.domain.chargingmap.TariffLine { *; }
 -keep,allowoptimization class io.ather.pro.domain.model.TripRecord { *; }
 -keep,allowoptimization class io.ather.pro.domain.model.TelemetrySample { *; }
 -keep,allowoptimization class io.ather.pro.domain.model.GpsData { *; }

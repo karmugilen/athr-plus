@@ -86,7 +86,7 @@ fun TripHistoryPanel(
     var selectedTrip by remember { mutableStateOf<TripRecord?>(null) }
     var showClearDialog by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
-    val rides = remember(trips) { trips.filter { it.hasRecordedSpeed() } }
+    val rides = remember(trips) { io.ather.pro.domain.ride.RideLog.openable(trips) }
     val visibleTrips = if (expanded || rides.size <= COMPACT_TRIP_COUNT) {
         rides
     } else {
@@ -843,11 +843,6 @@ private fun formatDurationSeconds(seconds: Double): String {
         minutes > 0L -> "${minutes}m ${remainder}s"
         else -> "${remainder}s"
     }
-}
-
-private fun TripRecord.hasRecordedSpeed(): Boolean {
-    val speed = averageSpeedKmh ?: return false
-    return speed.isFinite() && speed >= 0.0
 }
 
 private fun speedKmhText(speedKmh: Double?): String? {

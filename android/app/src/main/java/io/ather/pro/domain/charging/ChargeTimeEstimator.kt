@@ -47,22 +47,22 @@ object ChargeTimeEstimator {
         val percent = target.coerceIn(0, 100)
         val usingLive = charging && liveMinutes > 0.0 && observedRate != null && observedRate in 0.01..10.0
         val usingPast = learnedRate != null && learnedRate in 0.01..10.0 && learnedMinutes > 0.0
-        val chosen = ChargeRateBlend.rate(
-            liveRate = if (usingLive) observedRate else null,
+        val numbers = io.ather.pro.domain.computation.TelemetryComputation.engine().learnedChargeNumbers(
+            liveRate = if (usingLive) observedRate ?: Double.NaN else Double.NaN,
             liveMinutes = if (usingLive) liveMinutes else 0.0,
-            learnedRate = if (usingPast) learnedRate else null
-        ) ?: return null
+            learnedRate = if (usingPast) learnedRate ?: Double.NaN else Double.NaN,
+            learnedMinutes = if (usingPast) learnedMinutes else 0.0
+        )
+        val perMinute = numbers.getOrNull(0)?.takeIf { it.isFinite() } ?: return null
+        val basisCode = numbers.getOrNull(1)?.takeIf { it.isFinite() }?.toInt() ?: return null
+        val accuracy = numbers.getOrNull(2)?.takeIf { it.isFinite() }?.toInt() ?: return null
         val remaining = (percent - soc).coerceAtLeast(0.0)
-        val minutes = if (remaining == 0.0) 0.0 else remaining / chosen.percentPerMinute
+        val minutes = if (remaining == 0.0) 0.0 else remaining / perMinute
         if (!minutes.isFinite() || minutes !in 0.0..2_880.0) return null
         val duration = (minutes * 60_000).roundToLong()
         val margin = minOf(EARLY_STOP_MARGIN_MS, duration / 10)
-        val accuracy = ChargeAccuracy.percent(
-            liveMinutes = if (usingLive) liveMinutes else 0.0,
-            learnedMinutes = if (usingPast) learnedMinutes else 0.0
-        )
         return ChargeTimeEstimate(anchor, soc, percent, powerW, capacityWh, minutes,
-            anchor + duration, anchor + duration - margin, chosen.basisCode, accuracy)
+            anchor + duration, anchor + duration - margin, basisCode, accuracy)
     }
 }
 

@@ -7,9 +7,9 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import io.ather.pro.appContainer
+import io.ather.pro.domain.monitoring.MonitorNotice
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
-import kotlin.math.roundToInt
 import io.ather.pro.widget.DashboardWidgetUpdater
 
 /** Idle checks are scheduled by Android, without a notification. Active charging uses a silent FGS. */
@@ -37,28 +37,28 @@ class ChargingCheckWorker(context: Context, parameters: WorkerParameters) : Coro
                     ((if (manualRefresh) it.batteryUpdatedAt else it.chargingUpdatedAt) ?: 0) >= startedAt
                 }
             } ?: return Result.retry()
-            DashboardWidgetUpdater.publish(applicationContext, fresh, container.repository.chargeLimit.value)
+            val limitNow = container.repository.chargeLimit.value
+            DashboardWidgetUpdater.publish(applicationContext, fresh, limitNow)
             if (monitor.requested && !monitor.state.value.running) {
                 try {
                     setForeground(ForegroundInfo(MonitorNotification.ID, MonitorNotification.build(applicationContext,
-                        "Battery ${fresh.telemetry?.batterySoc?.roundToInt() ?: "—"}% · Monitoring your charge"), if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0))
+                        MonitorNotice.from(System.currentTimeMillis(), fresh, limitNow)), if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0))
                 } catch (_: RuntimeException) {
                     withContext(Dispatchers.Main) { monitor.reportFailure() }
                     return Result.retry()
                 }
                 ownsForeground = true
                 withContext(Dispatchers.Main) { monitor.onServiceStarted() }
-                var previous: String? = null
+                var previous: MonitorNotice? = null
                 while (currentCoroutineContext().isActive && monitor.requested) {
                     val dashboard = container.repository.dashboard.value
                     val limit = container.repository.chargeLimit.value
-                    val text = "${dashboard.telemetry?.batterySoc?.roundToInt() ?: "—"}%" +
-                        if (limit.enabled) " · Stop at ${limit.percent}% · ${limit.status.name.lowercase()}" else " · Charging"
-                    if (previous != text) {
-                        setForeground(ForegroundInfo(MonitorNotification.ID, MonitorNotification.build(applicationContext, text), if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0))
-                        previous = text
+                    val notice = MonitorNotice.from(System.currentTimeMillis(), dashboard, limit)
+                    if (previous != notice) {
+                        setForeground(ForegroundInfo(MonitorNotification.ID, MonitorNotification.build(applicationContext, notice), if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0))
+                        previous = notice
                     }
-                    delay(5_000)
+                    delay(1_000)
                 }
             }
             return Result.success()

@@ -34,7 +34,10 @@ object WidgetRenderer {
         val socSize = if (roomy) 28f else if (width < 250) 22f else 24f
         val rangeSize = if (roomy) 14f else 12f
         val limitEnabled = snapshot.limitPercent != null
-        val heroHeight = (socSize + rangeSize) * 1.2f * scale + 3 + heroPadding * 2
+        val showLastRide = snapshot.lastRideText.isNotBlank() && height >= 150
+        val lastRideSize = 12f
+        val lastRideHeight = if (showLastRide) lastRideSize * 1.2f * scale + 2 else 0f
+        val heroHeight = (socSize + rangeSize) * 1.2f * scale + 3 + heroPadding * 2 + lastRideHeight
         val chargeHeight = if (limitEnabled) 14 * 1.2f * scale + 20 else 0f
         val available = heightDp - paddingDp * 2 - (if (headerVisible) headerHeight else 0) - heroHeight - chargeHeight - panelPadding * 2
         val minRowsHeight = snapshot.modeRanges.size * 11 * 1.2f * scale
@@ -67,6 +70,7 @@ object WidgetRenderer {
             setTextColor(R.id.widget_soc, primary)
             setTextColor(R.id.widget_title, primary)
             setTextColor(R.id.widget_range, secondary)
+            setTextColor(R.id.widget_last_ride, secondary)
             setTextColor(R.id.widget_sync, secondary)
             setTextColor(R.id.widget_modes, secondary)
             setTextColor(R.id.widget_charge_limit, accent)
@@ -75,6 +79,11 @@ object WidgetRenderer {
             setViewPadding(R.id.widget_root, outerPadding, outerPadding, outerPadding, outerPadding)
             setTextViewText(R.id.widget_soc, "${snapshot.socText} battery")
             setTextViewText(R.id.widget_range, "${snapshot.rangeText} · ${snapshot.currentMode ?: "estimated range"}")
+            setViewVisibility(R.id.widget_last_ride, if (showLastRide) View.VISIBLE else View.GONE)
+            if (showLastRide) {
+                setTextViewText(R.id.widget_last_ride, snapshot.lastRideText)
+                setTextViewTextSize(R.id.widget_last_ride, TypedValue.COMPLEX_UNIT_SP, lastRideSize)
+            }
             setTextViewTextSize(R.id.widget_soc, TypedValue.COMPLEX_UNIT_SP, socSize)
             setTextViewTextSize(R.id.widget_range, TypedValue.COMPLEX_UNIT_SP, rangeSize)
             setViewPadding(R.id.widget_hero, 0, dp(heroPadding), 0, dp(heroPadding))
@@ -121,6 +130,7 @@ object WidgetRenderer {
             }
             setContentDescription(R.id.widget_root,
                 "Athr+. Battery ${snapshot.socText}${if (snapshot.charging) ", charging" else ""}. " +
+                    "${snapshot.rangeText}. ${if (showLastRide) "${snapshot.lastRideText}. " else ""}" +
                     "${snapshot.modesLabel}: ${snapshot.modesText}. ${snapshot.chargeLabel}. $status. ${snapshot.syncLabel}")
         }
     }

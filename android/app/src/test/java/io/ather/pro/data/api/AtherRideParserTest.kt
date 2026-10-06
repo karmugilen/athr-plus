@@ -1,5 +1,6 @@
 package io.ather.pro.data.api
 
+import io.ather.pro.domain.ride.RideLog
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -41,7 +42,7 @@ class AtherRideParserTest {
             ]}}
         """.trimIndent()
 
-        val trips = client.parseRides(raw, usableCapacityWh, tariffRatePerKWh)
+        val trips = client.parseRides(raw).map { RideLog.fromCloud(it, usableCapacityWh, tariffRatePerKWh) }
         assertEquals(2, trips.size)
 
         val ride = trips[0]
@@ -90,7 +91,7 @@ class AtherRideParserTest {
             }]}
         """.trimIndent()
 
-        val trip = client.parseRides(raw, usableCapacityWh, tariffRatePerKWh).single()
+        val trip = client.parseRides(raw).map { RideLog.fromCloud(it, usableCapacityWh, tariffRatePerKWh) }.single()
         assertEquals("ather-3", trip.id)
         assertEquals(0.5, trip.distanceKm, 0.001)
         assertEquals(5.0, trip.energyConsumedWh, 0.001)

@@ -178,7 +178,9 @@ fun ModeRangeCard(state: ScooterDashboardState) {
 @Composable
 fun ChargeEstimateCard(state: ScooterDashboardState, target: Int) {
     val estimate = RangeEstimator.target(state.telemetry, target,
-        state.settings.selectedModel.usableCapacityWh, state.settings.tariffRatePerKWh, state.modelForRange)
+        state.usablePackWh, state.settings.tariffRatePerKWh, state.modelForRange)
+    val cloudMinutes = io.ather.pro.domain.charging.ChargeDuration.cloudMinutes(
+        state.telemetry, target, state.usablePackWh, state.settings.tariffRatePerKWh, state.modelForRange)
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Charge to $target%", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -193,10 +195,10 @@ fun ChargeEstimateCard(state: ScooterDashboardState, target: Int) {
                     EstimateValue("Cost", "₹${number(estimate.costInr, 1)}")
                     EstimateValue("Range at target", "${number(estimate.rangeAtTargetKm)} km")
                 }
-                if (state.telemetry?.charging == true && estimate.minutesToTarget != null) {
-                    Text("About ${estimate.minutesToTarget.roundToInt()} min to target", style = MaterialTheme.typography.bodyMedium)
+                if (cloudMinutes != null) {
+                    Text("About ${cloudMinutes.roundToInt()} min to target", style = MaterialTheme.typography.bodyMedium)
                 }
-                Text("Estimates use your scooter’s range and selected battery size. Cost excludes charging losses.",
+                Text("Estimates use your scooter’s range and pack size. Cost excludes charging losses.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

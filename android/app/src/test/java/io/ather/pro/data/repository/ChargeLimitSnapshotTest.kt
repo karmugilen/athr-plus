@@ -2,11 +2,12 @@ package io.ather.pro.data.repository
 
 import io.ather.pro.data.api.AtherApiClient
 import io.ather.pro.data.api.AtherCloudApi
+import io.ather.pro.data.local.SavedScooterReading
+import io.ather.pro.data.local.SavedScooterReadingStore
 import io.ather.pro.domain.charging.ChargeLimitController
 import io.ather.pro.domain.charging.ChargeSnapshotRefresh
 import io.ather.pro.domain.charging.RemoteChargingGateway
 import io.ather.pro.domain.model.RemoteCommandPhase
-import io.ather.pro.domain.model.TripRecord
 import io.ather.pro.domain.model.VehicleProfile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -98,12 +99,37 @@ class ChargeLimitSnapshotTest {
         assertEquals(listOf(false), cloud.commands)
     }
 
-    @Test fun disablingLimitStopsPeriodicSnapshotRefresh() {
+    @Test fun disabledLimitStillRefreshesTheLiveSnapshot() {
         begin()
         repository.setChargeLimit(false, 98)
         repeat(4) { refresh() }
-        assertEquals(1, cloud.sockets.size)
+        assertEquals(5, cloud.sockets.size)
+        assertTrue(cloud.sockets.dropLast(1).all { it.cancelled })
         assertTrue(cloud.commands.isEmpty())
+        assertFalse(repository.chargeLimit.value.enabled)
+    }
+
+    @Test fun savedReadingPaintsTheHomeScreenAndDoesNotPause() {
+        val readings = MemoryReadings { now }
+        readings.current = SavedScooterReading(
+            vehicleUuid = "test-vehicle", savedAtMs = now - 60_000, sourceTimestampMs = now - 60_000,
+            batterySoc = 90.0, rangeKm = 40.0, latitude = 13.0, longitude = 80.0
+        )
+        val ownCloud = QuietCloud()
+        val local = AtherRepository(
+            api = ownCloud, repositoryScope = scope, clock = { now }, savedReadingStore = readings
+        )
+        local.applyCredentials("test-token", "test-vehicle")
+        assertEquals(90.0, local.dashboard.value.telemetry!!.batterySoc!!, 0.0)
+        assertEquals(13.0, local.dashboard.value.telemetry!!.gps!!.latitude!!, 0.0)
+        assertNull(local.dashboard.value.telemetry!!.charging)
+        local.setChargeLimit(true, 80)
+        repeat(4) {
+            now += ChargeSnapshotRefresh.INTERVAL_MS
+            local.tickChargeMonitoring()
+        }
+        assertTrue(ownCloud.commands.isEmpty())
+        assertTrue(local.chargeLimit.value.enabled)
     }
 
     @Test fun manualRefreshGetsANewSnapshotRatherThanResubscribingQuietSocket() {
@@ -132,8 +158,8 @@ class ChargeLimitSnapshotTest {
         override fun fetchVehicleProfile(token: String, uuid: String, callback: (Result<VehicleProfile>) -> Unit) {
             callback(Result.success(VehicleProfile()))
         }
-        override fun fetchRides(token: String, scooterId: String, usableCapacityWh: Double,
-            tariffRatePerKWh: Double, callback: (Result<List<TripRecord>>) -> Unit) {
+        override fun fetchRides(token: String, scooterId: String,
+            callback: (Result<List<io.ather.pro.domain.ride.RideLog.CloudFields>>) -> Unit) {
             callback(Result.success(emptyList()))
         }
 
@@ -144,6 +170,12 @@ class ChargeLimitSnapshotTest {
         fun receive(json: String, index: Int = sockets.lastIndex) {
             sockets[index].listener.onTelemetry(parser.parseTelemetry(json)!!)
         }
+    }
+
+    private class MemoryReadings(private val now: () -> Long) : SavedScooterReadingStore {
+        var current: SavedScooterReading? = null
+        override fun load(vehicleUuid: String) = current?.takeIf { it.usableFor(vehicleUuid, now()) }
+        override fun save(reading: SavedScooterReading) { current = reading }
     }
 
     private class QuietSocket(val listener: AtherCloudApi.Listener) : WebSocket {

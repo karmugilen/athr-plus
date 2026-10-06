@@ -5,8 +5,8 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import io.ather.pro.domain.model.ScooterTelemetry
-import io.ather.pro.domain.model.TripRecord
 import io.ather.pro.domain.model.VehicleProfile
+import io.ather.pro.domain.ride.RideLog
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -18,7 +18,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import kotlin.math.roundToInt
 
 class AtherApiClient : AtherCloudApi {
 
@@ -172,9 +171,7 @@ class AtherApiClient : AtherCloudApi {
     override fun fetchRides(
         token: String,
         scooterId: String,
-        usableCapacityWh: Double,
-        tariffRatePerKWh: Double,
-        callback: (Result<List<TripRecord>>) -> Unit
+        callback: (Result<List<RideLog.CloudFields>>) -> Unit
     ) {
         val request = Request.Builder()
             .url("https://cerberus.ather.io/api/v1/rides?scooterid=$scooterId&limit=100&page=1")
@@ -195,7 +192,7 @@ class AtherApiClient : AtherCloudApi {
                     }
                     val result = runCatching {
                         val raw = it.body?.string() ?: return@runCatching emptyList()
-                        parseRides(raw, usableCapacityWh, tariffRatePerKWh)
+                        parseRides(raw)
                     }
                     callback(result)
                 }
@@ -207,11 +204,7 @@ class AtherApiClient : AtherCloudApi {
      * Parses a Cerberus rides payload. A top-level "trips" array wins over data.trips.
      * Rides without a polyline are kept; route fields stay null.
      */
-    internal fun parseRides(
-        raw: String,
-        usableCapacityWh: Double,
-        tariffRatePerKWh: Double
-    ): List<TripRecord> {
+    internal fun parseRides(raw: String): List<RideLog.CloudFields> {
         val root = gson.fromJson(raw, JsonObject::class.java)
         val trips = root?.get("trips")?.takeIf(JsonElement::isJsonArray)?.asJsonArray
             ?: root?.objectOrNull("data")?.get("trips")
@@ -224,27 +217,13 @@ class AtherApiClient : AtherCloudApi {
             val end = ride.epochMillis("ride_end_time") ?: start
             val distanceKm = (ride.decimal("distance_m") ?: return@mapNotNull null) / 1000.0
             if (distanceKm <= 0.0) return@mapNotNull null
-            val efficiency = ride.decimal("efficiency_wh_km")?.takeIf { value -> value > 0.0 }
-            val energyWh = efficiency?.times(distanceKm) ?: 0.0
-            val estimatedSoc = if (energyWh > 0.0 && usableCapacityWh > 0.0) {
-                energyWh / usableCapacityWh * 100.0
-            } else 0.0
             val polyline = ride.objectOrNull("polyline_details")
-            TripRecord(
+            RideLog.CloudFields(
                 id = "ather-$id",
                 startTimeMs = start,
                 endTimeMs = end,
-                distanceKm = distanceKm.round(2),
-                // Ather's rides API does not return SoC. This estimate is
-                // retained for cost math but is never presented as measured.
-                socConsumed = estimatedSoc.round(1),
-                energyConsumedWh = energyWh.round(1),
-                efficiencyWhPerKm = (efficiency ?: 0.0).round(1),
-                electricityCostInr = (energyWh / 1000.0 * tariffRatePerKWh).round(2),
-                startOdoKm = 0.0,
-                endOdoKm = 0.0,
-                estimatedPackCapacityWh = null,
-                isOfficialRide = true,
+                distanceKm = distanceKm,
+                efficiencyWhPerKm = ride.decimal("efficiency_wh_km")?.takeIf { value -> value > 0.0 },
                 durationSeconds = ride.nonNegativeFinite("duration_secs"),
                 averageSpeedKmh = ride.nonNegativeFinite("avg_display_speed_kmph"),
                 topSpeedKmh = ride.nonNegativeFinite("max_display_speed_kmph"),
@@ -655,14 +634,6 @@ class AtherApiClient : AtherCloudApi {
                 else -> null
             }
         }.getOrNull()
-    }
-
-    private fun Double.round(decimals: Int): Double {
-        val scale = when (decimals) {
-            1 -> 10.0
-            else -> 100.0
-        }
-        return (this * scale).roundToInt() / scale
     }
 
     private companion object {

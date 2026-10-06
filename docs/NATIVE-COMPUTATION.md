@@ -1,6 +1,6 @@
 # Native telemetry computation
 
-Battery history filtering/sorting and range/charge-target and charge-time calculations run in `rust/ather-math`, through primitive JNI arrays and scalars. Android initializes the implementation once in `AtherApplication`. The domain declares the boundary; the data layer owns JNI. Authentication, socket callbacks, Room and lifecycle handling remain in Kotlin. Credentials are never passed to Rust.
+Battery history filtering, mode-range scaling, charge-to-target energy, and the learned charge-rate blend run in `rust/ather-math`, through primitive JNI arrays and scalars. Android installs that adapter once in `AtherApplication`. Unit tests use the JVM adapter in `JvmTelemetryMath` when Rust is not loaded, so the same calls run in both places. The pause decision, freshness checks, and early-stop margin stay in Kotlin. The old watt-based native charge time is gone. Authentication, socket callbacks, Room and lifecycle handling remain in Kotlin. Credentials are never passed to Rust.
 
 Build with the existing Gradle `assembleDebug` command. `preBuild` invokes `scripts/build-android-rust.sh`, packages four Android ABIs, and caches its outputs until native sources change. Requirements: Rust/Cargo with Android targets installed and Android NDK 26.1.10909125. Targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android and i686-linux-android. Generated binaries remain under ignored build directories.
 
@@ -8,7 +8,7 @@ Refresh requests a fresh cloud snapshot on a fixed five-second interval while co
 
 Battery history retains 24 hours of measured samples, at most one per five seconds. Repeated source timestamps cannot create new samples; cached snapshots without a source timestamp are not charted. Existing discarded data cannot be recovered. The chart defaults to 24 hours, supports shorter windows, refreshes its clock every 30 seconds, and leaves gaps without invented values. Persistence appends new measurements and prunes expired rows rather than replacing the full battery table.
 
-This change was built for phone testing at the user's request. No benchmarks or automated tests were run for this port.
+Host `cargo test` in `rust/ather-math` covers the learned-rate blend and battery-history window. JVM unit tests cover the same formulas through `JvmTelemetryMath`. No phone benchmarks were run.
 
 
 The limiter also has an estimated-time fallback. Its setup card previews time to the selected target and the slightly earlier Pause time as the slider changes. The time comes from charging speed, not charger watts. A new charge uses the speed saved from earlier charges. As the current charge continues, that live speed takes more of the estimate and replaces the saved speed after 20 minutes. Each finished charge of at least one minute is folded back into the saved speed, capped at 180 minutes of weight, so later charges can still move it. With no saved speed and no live speed yet, the card waits instead of guessing from watts.

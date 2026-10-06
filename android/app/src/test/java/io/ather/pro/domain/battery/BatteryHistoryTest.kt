@@ -8,14 +8,14 @@ import org.junit.Test
 class BatteryHistoryTest {
     private fun point(time: Long, soc: Double) = TelemetrySample(time, 0.0, soc, "Unknown")
 
-    @Test fun continuousFastPacketsStillProduceOneSamplePerSecond() {
+    @Test fun continuousFastPacketsStillProduceOneSamplePerFiveSeconds() {
         var history = emptyList<TelemetrySample>()
-        for (i in 0..30) {
-            history = BatteryHistory.record(history, ScooterTelemetry(batterySoc = 80.0 - i / 10.0),
+        for (i in 0..150) {
+            history = BatteryHistory.record(history, ScooterTelemetry(batterySoc = 80.0 - i / 100.0),
                 10_000L + i * 100)
         }
-        assertEquals(listOf(10_000L, 11_000L, 12_000L, 13_000L), history.map { it.timestamp })
-        assertEquals(77.0, history.last().batterySoc, 0.001)
+        assertEquals(listOf(10_000L, 15_000L, 20_000L, 25_000L), history.map { it.timestamp })
+        assertEquals(78.5, history.last().batterySoc, 0.001)
     }
 
     @Test fun batteryReportsDoNotRequireRidingModeAndUnrelatedPacketsDoNotAddPoints() {

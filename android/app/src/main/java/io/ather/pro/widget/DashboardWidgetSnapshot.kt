@@ -7,8 +7,11 @@ import io.ather.pro.domain.range.RideModeRange
 import io.ather.pro.domain.charging.ChargeLimitController
 import io.ather.pro.domain.charging.ChargingControl
 import com.google.gson.Gson
+import io.ather.pro.domain.battery.kmPerUnitOrNull
 import io.ather.pro.domain.model.ConnectionStatus
 import io.ather.pro.domain.model.ScooterDashboardState
+import io.ather.pro.domain.model.TripRecord
+import io.ather.pro.domain.ride.RideLog
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -26,7 +29,9 @@ data class DashboardWidgetSnapshot(
     val currentMode: String? = null,
     val vehicleName: String = "ATHR+",
     val limitPercent: Int? = null,
-    val estimatedStopAtMs: Long? = null
+    val estimatedStopAtMs: Long? = null,
+    /** Last ride the trip list can open, for example "Last ride 56.2 km/unit". */
+    val lastRideText: String = ""
 ) {
     val socText: String
         get() = socPercent?.let { String.format(Locale.getDefault(), "%.0f%%", it) } ?: "—"
@@ -82,8 +87,16 @@ data class DashboardWidgetSnapshot(
                 limitPercent = limit.percent.takeIf { limit.enabled },
                 estimatedStopAtMs = limit.estimate?.stopAtMs?.takeIf {
                     limit.enabled && limit.status == ChargeLimitController.Status.MONITORING
-                }
+                },
+                lastRideText = lastRideLabel(state.recentTrips)
             )
+        }
+
+        /** Newest ride AUTO TRIP LOGS can open. km/unit is that ride's distance divided by kWh. */
+        fun lastRideLabel(trips: List<TripRecord>): String {
+            val ride = trips.filter(RideLog::canOpen).maxByOrNull { it.endTimeMs } ?: return ""
+            val kmPerUnit = ride.kmPerUnitOrNull()?.takeIf { it.isFinite() && it > 0.0 } ?: return ""
+            return "Last ride ${String.format(Locale.US, "%.1f km/unit", kmPerUnit)}"
         }
 
         fun load(context: Context): DashboardWidgetSnapshot {
@@ -107,7 +120,8 @@ data class DashboardWidgetSnapshot(
                     currentMode = prefs.getString("current_mode", null),
                     vehicleName = prefs.getString("vehicle_name", "ATHR+") ?: "ATHR+",
                     limitPercent = prefs.getInt("limit_percent", -1).takeIf { it in 0..100 },
-                    estimatedStopAtMs = prefs.getLong("estimated_stop_at", 0).takeIf { it > 0 }
+                    estimatedStopAtMs = prefs.getLong("estimated_stop_at", 0).takeIf { it > 0 },
+                    lastRideText = prefs.getString("last_ride", "").orEmpty()
                 )
             }.getOrDefault(DashboardWidgetSnapshot())
         }
@@ -138,6 +152,7 @@ data class DashboardWidgetSnapshot(
                     putBoolean("charging", snapshot.charging)
                     putString("current_mode", snapshot.currentMode)
                     putString("vehicle_name", snapshot.vehicleName)
+                    putString("last_ride", snapshot.lastRideText)
                 }
                 .apply()
         }

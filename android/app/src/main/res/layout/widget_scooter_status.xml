@@ -37,6 +37,10 @@
                 android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="3dp"
                 android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end"
                 android:text="@string/widget_range_placeholder" android:textColor="@color/widget_secondary" android:textSize="14sp" />
+            <TextView android:id="@+id/widget_last_ride"
+                android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp"
+                android:visibility="gone" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end"
+                android:textColor="@color/widget_secondary" android:textSize="12sp" />
         </LinearLayout>
     </LinearLayout>
 

@@ -14,7 +14,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.ather.pro.domain.charging.ChargeLimitController
-import io.ather.pro.domain.charging.ChargeTimeEstimator
+import io.ather.pro.domain.charging.ChargeLimitSession
 import io.ather.pro.domain.charging.ChargingControl
 import io.ather.pro.domain.model.ScooterDashboardState
 import java.text.SimpleDateFormat
@@ -39,13 +39,17 @@ fun ChargeLimitCard(
     val active = ChargingControl.isActivelyCharging(dashboard.telemetry)
     val reportedAt = dashboard.batteryReportedAt ?: dashboard.batteryUpdatedAt
     val unapplied = selected != snapshot.percent
-    val estimate = if (snapshot.enabled && !unapplied && active && snapshot.estimate != null)
-        snapshot.estimate else ChargeTimeEstimator.estimate(dashboard.telemetry, selected,
-            dashboard.settings.selectedModel.usableCapacityWh, snapshot.chargerPowerW, reportedAt ?: 0L, now,
-            observedRate = dashboard.chargingRatePercentPerMinute, charging = active,
-            learnedRate = snapshot.learnedPercentPerMinute,
-            learnedMinutes = snapshot.learnedMinutes,
-            liveMinutes = dashboard.chargingRateMinutes)
+    val shown = ChargeLimitSession.shown(
+        snapshot = snapshot,
+        telemetry = dashboard.telemetry,
+        selectedPercent = selected,
+        capacityWh = dashboard.usablePackWh,
+        reportedAtMs = reportedAt,
+        nowMs = now,
+        liveRate = dashboard.chargingRatePercentPerMinute,
+        liveMinutes = dashboard.chargingRateMinutes
+    )
+    val estimate = shown.estimate
     val clockFormat = remember { SimpleDateFormat("d MMM, h:mm a", Locale.getDefault()) }
     fun at(time: Long) = clockFormat.format(Date(time))
     fun remaining(until: Long): String {
@@ -90,8 +94,7 @@ fun ChargeLimitCard(
                         Text("${remaining(estimate.targetAtMs)} · ${estimate.accuracyPercent}% accuracy",
                             style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                         Text(estimate.basisLabel, style = MaterialTheme.typography.bodySmall)
-                        val timerArmed = snapshot.enabled && !unapplied && snapshot.armed && snapshot.estimate != null &&
-                            snapshot.status == ChargeLimitController.Status.MONITORING
+                        val timerArmed = shown.timerArmed
                         Text((if (timerArmed) "Scheduled Pause: " else "Pause preview: ") +
                             "${at(estimate.stopAtMs)} (${remaining(estimate.stopAtMs)})",
                             style = MaterialTheme.typography.bodySmall)

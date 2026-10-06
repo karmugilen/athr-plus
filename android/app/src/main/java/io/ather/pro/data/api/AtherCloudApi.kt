@@ -2,8 +2,8 @@ package io.ather.pro.data.api
 
 import io.ather.pro.domain.charging.RemoteChargingGateway
 import io.ather.pro.domain.model.ScooterTelemetry
-import io.ather.pro.domain.model.TripRecord
 import io.ather.pro.domain.model.VehicleProfile
+import io.ather.pro.domain.ride.RideLog
 import okhttp3.WebSocket
 
 /** Cloud transport boundary, including the snapshot obtained by a new connection. */
@@ -22,8 +22,6 @@ interface AtherCloudApi {
     fun fetchRides(
         token: String,
         scooterId: String,
-        usableCapacityWh: Double,
-        tariffRatePerKWh: Double,
-        callback: (Result<List<TripRecord>>) -> Unit
+        callback: (Result<List<RideLog.CloudFields>>) -> Unit
     )
 }

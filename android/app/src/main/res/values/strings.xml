@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">Athr+</string>
     <string name="widget_title">Athr+</string>
-    <string name="widget_description">Battery and remaining kilometres in each supported ride mode</string>
+    <string name="widget_description">Battery, ride-mode kilometres, and last ride efficiency</string>
     <string name="widget_content_description">Athr+ battery and range widget</string>
     <string name="widget_soc_placeholder">—</string>
     <string name="widget_range_placeholder">Range —</string>

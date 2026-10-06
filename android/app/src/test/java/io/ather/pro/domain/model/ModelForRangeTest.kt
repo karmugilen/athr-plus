@@ -13,6 +13,7 @@ class ModelForRangeTest {
             settings = ScooterSettings(selectedModel = ScooterModel.ATHER_450X_3_7)
         )
         assertEquals(ScooterModel.ATHER_450S, state.modelForRange)
+        assertEquals(ScooterModel.ATHER_450S.usableCapacityWh, state.usablePackWh, 0.0)
         assertEquals(
             listOf("SmartEco", "Eco", "Ride", "Sport"),
             RangeEstimator.modes(state.telemetry, state.modelForRange).map { it.name }
@@ -26,6 +27,7 @@ class ModelForRangeTest {
             settings = ScooterSettings(selectedModel = ScooterModel.ATHER_450X_3_7)
         )
         assertEquals(ScooterModel.ATHER_450X_3_7, state.modelForRange)
+        assertEquals(ScooterModel.ATHER_450X_3_7.usableCapacityWh, state.usablePackWh, 0.0)
         val names = RangeEstimator.modes(state.telemetry, state.modelForRange).map { it.name }
         assertEquals(listOf("SmartEco", "Eco", "Ride", "Sport", "Warp"), names)
         assertFalse(names.contains("Warp+"))

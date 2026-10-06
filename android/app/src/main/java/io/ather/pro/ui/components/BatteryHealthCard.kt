@@ -12,7 +12,7 @@ import io.ather.pro.domain.model.ScooterDashboardState
 
 @Composable
 fun BatteryHealthCard(dashboard: ScooterDashboardState) {
-    val capacity = dashboard.settings.selectedModel.usableCapacityWh
+    val capacity = dashboard.usablePackWh
     val health = remember(dashboard.reportedSohPercentage, dashboard.recentTrips, capacity) {
         EstimatedBatteryHealth.resolve(dashboard.reportedSohPercentage, dashboard.recentTrips, capacity)
     }

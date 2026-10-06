@@ -9,6 +9,8 @@ import android.location.LocationManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -53,8 +55,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.google.gson.Gson
+import io.ather.pro.data.chargingmap.ChargerLocationCache
 import io.ather.pro.data.chargingmap.ChargingMapApi
 import io.ather.pro.domain.chargingmap.ChargerLocation
+import io.ather.pro.ui.maps.MapTiles
 import io.ather.pro.domain.chargingmap.ChargingMapLoadState
 import io.ather.pro.domain.chargingmap.WalletSnapshot
 import io.ather.pro.ui.maps.MapRefreshRate
@@ -68,6 +72,7 @@ import io.ather.pro.ui.theme.AtherTextMuted
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -106,7 +111,9 @@ fun ChargingMapScreen(
     var centerLat by remember { mutableStateOf(preferredCenterLat) }
     var centerLng by remember { mutableStateOf(preferredCenterLng) }
     var locationNote by remember { mutableStateOf<String?>(null) }
+    var chargersNote by remember { mutableStateOf<String?>(null) }
     var tilesFailedMessage by remember { mutableStateOf<String?>(null) }
+    val chargerCache = remember { ChargerLocationCache(File(context.cacheDir, "saved-chargers.json")) }
 
     fun refresh() {
         val token = sessionToken?.takeIf { it.isNotBlank() }
@@ -117,7 +124,7 @@ fun ChargingMapScreen(
         }
 
         walletState = ChargingMapLoadState.Loading
-        chargersState = ChargingMapLoadState.Loading
+        if (chargersState !is ChargingMapLoadState.Ready) chargersState = ChargingMapLoadState.Loading
         selected = null
 
         scope.launch {
@@ -143,6 +150,14 @@ fun ChargingMapScreen(
                 return@launch
             }
 
+            val cached = withContext(Dispatchers.IO) { chargerCache.loadNear(resolved.lat, resolved.lng) }
+            if (cached != null) {
+                chargersState = ChargingMapLoadState.Ready(cached)
+                chargersNote = "Saved chargers · updating"
+            } else if (chargersState !is ChargingMapLoadState.Ready) {
+                chargersState = ChargingMapLoadState.Loading
+            }
+
             val locationsResult = withContext(Dispatchers.IO) {
                 api.fetchLocations(
                     token,
@@ -154,15 +169,23 @@ fun ChargingMapScreen(
                     ),
                 )
             }
-            chargersState = locationsResult.fold(
+            locationsResult.fold(
                 onSuccess = { list ->
-                    if (list.isEmpty()) {
+                    chargersNote = null
+                    chargersState = if (list.isEmpty()) {
                         ChargingMapLoadState.Empty("No public chargers in this area")
                     } else {
+                        withContext(Dispatchers.IO) { chargerCache.save(resolved.lat, resolved.lng, list) }
                         ChargingMapLoadState.Ready(list)
                     }
                 },
-                onFailure = { ChargingMapLoadState.Error(it.message ?: "Charger request failed") },
+                onFailure = {
+                    if (chargersState is ChargingMapLoadState.Ready) {
+                        chargersNote = "Showing saved chargers"
+                    } else {
+                        chargersState = ChargingMapLoadState.Error(it.message ?: "Charger request failed")
+                    }
+                },
             )
         }
     }
@@ -294,7 +317,11 @@ fun ChargingMapScreen(
         // Always-visible list fallback (usable even when tiles fail).
         Text(
             text = when (val state = chargersState) {
-                is ChargingMapLoadState.Ready -> "${state.value.size} chargers nearby"
+                is ChargingMapLoadState.Ready -> if (chargersNote.isNullOrBlank()) {
+                    "${state.value.size} chargers nearby"
+                } else {
+                    "${state.value.size} chargers nearby · $chargersNote"
+                }
                 is ChargingMapLoadState.Empty -> "Charger list"
                 is ChargingMapLoadState.Error -> "Charger list unavailable"
                 else -> "Charger list"
@@ -601,6 +628,9 @@ private fun ChargerMapWebView(
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 addJavascriptInterface(jsBridge, "ChargerMapBridge")
                 webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
+                        MapTiles.intercept(view.context, request.url?.toString())
+
                     override fun onPageFinished(view: WebView?, url: String?) {
                         // Leaflet also notifies via bridge; this covers asset load completion.
                         callbacks.ready()

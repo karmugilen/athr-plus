@@ -13,7 +13,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.ServiceCompat
 import io.ather.pro.appContainer
-import io.ather.pro.domain.model.ConnectionStatus
+import io.ather.pro.domain.monitoring.MonitorNotice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,13 +21,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 /** One foreground service owns continuous cloud telemetry, including when the UI closes. */
 class ScooterMonitorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var observing = false
-    private var previousText: String? = null
+    private var previousNotice: MonitorNotice? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var cutoffWakeLock: PowerManager.WakeLock? = null
     private var wakeLockRenewedAt = 0L
@@ -63,23 +62,12 @@ class ScooterMonitorService : Service() {
                     val state = appContainer.repository.dashboard.value
                     val limit = appContainer.repository.chargeLimit.value
                     keepCutoffAwake(limit.enabled && appContainer.monitoring.requested)
-                    val stale = state.lastUpdated?.let { System.currentTimeMillis() - it > 60_000 } ?: true
-                    val connection = when {
-                        state.connection != ConnectionStatus.CONNECTED -> "Reconnecting"
-                        stale -> "Waiting for scooter data"
-                        else -> "Connected"
+                    val notice = MonitorNotice.from(System.currentTimeMillis(), state, limit)
+                    if (notice != previousNotice) {
+                        notifications.notify(NOTIFICATION_ID, MonitorNotification.build(this@ScooterMonitorService, notice))
+                        previousNotice = notice
                     }
-                    val soc = state.telemetry?.batterySoc?.takeIf(Double::isFinite)?.roundToInt()?.let { " · $it%" }.orEmpty()
-                    val target = if (limit.enabled) " · Limit ${limit.percent}% (${limit.status.name.lowercase()})" else ""
-                    val stopTime = if (limit.enabled && limit.status == io.ather.pro.domain.charging.ChargeLimitController.Status.MONITORING)
-                        limit.estimate?.let { " · Est. stop " + java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
-                            .format(java.util.Date(it.stopAtMs)) }.orEmpty() else ""
-                    val text = connection + soc + target + stopTime
-                    if (text != previousText) {
-                        notifications.notify(NOTIFICATION_ID, notification(text))
-                        previousText = text
-                    }
-                    delay(5_000)
+                    delay(1_000)
                 }
             }
         }

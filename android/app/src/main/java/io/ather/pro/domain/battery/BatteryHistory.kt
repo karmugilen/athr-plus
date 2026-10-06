@@ -39,7 +39,7 @@ object BatteryHistory {
         durationMs: Long?
     ): List<TelemetrySample> {
         val start = durationMs?.let { nowMs - it } ?: 0L
-        val engine = io.ather.pro.domain.computation.TelemetryComputation.requireEngine()
+        val engine = io.ather.pro.domain.computation.TelemetryComputation.engine()
         return engine.historyIndices(history.map { it.timestamp }.toLongArray(),
             history.map { it.batterySoc }.toDoubleArray(), start, nowMs).map { history[it] }
     }

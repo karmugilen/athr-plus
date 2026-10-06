@@ -71,8 +71,9 @@ class AtherTelemetryParserTest {
         assertEquals(true, telem.charging)
         assertEquals(true, telem.chargerConnected)
         assertEquals("Charging", telem.chargingStatus)
-        assertEquals(95.0, telem.timeToFullChargeMin!!, 0.1)
-        assertEquals(40.0, telem.timeToEightyChargeMin!!, 0.1)
+        // Fixtures store Cerberus counters in seconds. The domain field is minutes.
+        assertEquals(95.0 / 60.0, telem.timeToFullChargeMin!!, 0.001)
+        assertEquals(40.0 / 60.0, telem.timeToEightyChargeMin!!, 0.001)
         assertEquals("public", telem.chargerType)
         assertEquals("start", telem.remoteChargingAction)
 
@@ -135,7 +136,7 @@ class AtherTelemetryParserTest {
         assertNull(chargingDelta.rangeKm)
         assertEquals(true, chargingDelta.charging)
         assertEquals(true, chargingDelta.chargerConnected)
-        assertEquals(60.0, chargingDelta.timeToFullChargeMin!!, 0.1)
+        assertEquals(1.0, chargingDelta.timeToFullChargeMin!!, 0.001)
         assertEquals("start", chargingDelta.remoteChargingAction)
 
         assertNull(modeDelta.batterySoc)
@@ -149,7 +150,7 @@ class AtherTelemetryParserTest {
         assertEquals(27659.418, afterCharge.odoKm!!, 0.001)
         assertEquals(true, afterCharge.charging)
         assertEquals("Charging", afterCharge.chargingStatus)
-        assertEquals(60.0, afterCharge.timeToFullChargeMin!!, 0.1)
+        assertEquals(1.0, afterCharge.timeToFullChargeMin!!, 0.001)
         assertEquals("start", afterCharge.remoteChargingAction)
         assertEquals(32.0, afterCharge.tpms!!.frontPressurePsi!!, 0.1)
         assertEquals(140.0, afterCharge.modeRanges["SmartEco"]!!.rawRangeKm!!, 0.1)
