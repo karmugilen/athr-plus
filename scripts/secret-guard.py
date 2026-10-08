@@ -13,8 +13,13 @@ STORE = Path.home() / ".local/share/atherpro-lab"
 JWT = re.compile(rb"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
 BEARER = re.compile(rb"(?i)\bbearer\s+[A-Za-z0-9_.~+/=-]{24,}")
 ASSIGNMENT = re.compile(
-    rb'''(?i)["']?(?:access_token|refresh_token|auth_token|ather_token|token)["']?\s*[:=]\s*["'][A-Za-z0-9_.~+/=-]{32,}["']'''
+    rb'''(?i)["']?(?:access_token|refresh_token|auth_token|ather_token|token|api[_-]?key|client_secret|secret_key)["']?\s*[:=]\s*["'][A-Za-z0-9_.~+/=-]{32,}["']'''
 )
+API_KEY = re.compile(
+    rb"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}|"
+    rb"AIza[A-Za-z0-9_-]{35}|AKIA[A-Z0-9]{16})\b"
+)
+PRIVATE_KEY = re.compile(rb"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----")
 PRIVATE_NAME = re.compile(
     r"(?:^|/)(?:\.env(?:\..*)?|ather_session\.json|session\.json|pending-login\.json|"
     r"last-response\.json|monitor\.jsonl|charge-limit-state\.json|charge-limit\.lock|"
@@ -46,6 +51,8 @@ def known_secrets():
 
 
 def reason(path, content, secrets):
+    if path.lower().endswith((".keystore", ".jks", ".p12", ".pfx")):
+        return "private signing/key container filename"
     if PRIVATE_NAME.search(path):
         return "private session/environment/capture filename"
     if str(STORE).encode() in content and path not in (
@@ -58,6 +65,8 @@ def reason(path, content, secrets):
         return "JWT-like credential"
     if BEARER.search(content) or ASSIGNMENT.search(content):
         return "literal authentication credential"
+    if API_KEY.search(content) or PRIVATE_KEY.search(content):
+        return "API credential or private key"
     return None
 
 

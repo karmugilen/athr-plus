@@ -161,6 +161,14 @@
     if (pointers.size === 0) interacting = false;
   }
 
+  function renderPhonePosition(position, accuracy) {
+    if (!phone) return;
+    phone.setLatLng(position);
+    phoneAccuracy = accuracyCircle(phoneAccuracy, position, accuracy, '#00B0FF');
+    updateGuidance();
+    if (followTarget === 'phone') followPosition(phone);
+  }
+
   window.updateAtherMarker = function (lat, lng, accuracy) {
     if (!validPosition(lat, lng)) return;
     if (!map) { pendingScooter = [lat, lng, accuracy]; return; }
@@ -188,11 +196,9 @@
         html: '<div id="phone-marker-icon" class="phone-marker-container"><div class="phone-marker-pulse"></div><div class="phone-arrow"></div></div>'
       });
       phone = L.marker(position, { icon, zIndexOffset: 1100, interactive: false }).addTo(map);
-    } else phone.setLatLng(position);
-    phoneAccuracy = accuracyCircle(phoneAccuracy, position, accuracy, '#00B0FF');
-    updateGuidance();
+    }
+    renderPhonePosition(position, accuracy);
     updateOrientation();
-    if (followTarget === 'phone') followPosition(phone);
   };
 
   window.removeAtherMarker = function () {
@@ -311,10 +317,10 @@
     map.on('rotate', updateOrientation);
     window.addEventListener('blur', function () { pointers.clear(); settleCamera(); });
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) stopHeadingAnimation();
+      if (document.hidden) { stopHeadingAnimation(); }
       else updateHeading();
     });
-    window.addEventListener('pagehide', stopHeadingAnimation);
+    window.addEventListener('pagehide', function () { stopHeadingAnimation(); });
     window.addEventListener('online', window.retryMapTiles);
     new ResizeObserver(() => map.invalidateSize({ animate: false, pan: false })).observe(container);
     document.getElementById('tile-status').addEventListener('click', window.retryMapTiles);

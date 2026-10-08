@@ -8,7 +8,7 @@ Only users who have installed a version containing this updater get these notice
 
 ## Publishing subsequent versions
 
-1. Increase `versionCode` in `android/app/build.gradle.kts` above every distributed build, including local builds. The current release v1.1.16 is code **19**, so the next update must be at least **20**. Use a stable version tag such as `v1.1.17`.
+1. Increase `versionCode` in `android/app/build.gradle.kts` above every distributed build, including local builds. The current release v1.1.17 is code **20**, so the next update must be at least **21**. Use a stable version tag such as `v1.1.18`.
 2. Build and package locally with the original signing key, commit your reviewed app changes, and push the version tag. Upload the APK, checksum, and `update.json` to a **draft** release. Alternatively, the optional signing workflow prepares the draft when configured as described below.
 3. Review the draft’s notes and APK, then publish the release as **Latest**. Apps detect it on their next automatic or manual check.
 
@@ -29,7 +29,7 @@ Required Actions secrets:
 
 The existing public v1.1.2 and current local APK share certificate SHA-256 `9c33627be30850a9fd315b374896b5fe229bd8c09c51e0d7a77583cd6d3a38f3`. The original release used this machine’s Android debug signing key. Preserve that exact key for existing users. Generating a new debug key on a CI runner breaks Android updates. A future key rotation requires a separate supported migration. Never commit keystores or put scooter tokens into Actions secrets. The packaging script rejects APKs signed with another certificate.
 
-The v1.1.16 release is built and published locally. No signing key or scooter session has been uploaded to GitHub Actions. Keep using local packaging unless you explicitly choose to enable CI signing.
+Releases through v1.1.17 are built and published locally. No signing key or scooter session has been uploaded to GitHub Actions. Keep using local packaging unless you explicitly choose to enable CI signing.
 
 The signing certificate identifies the publisher and is public. The APK SHA-256 identifies the exact file and changes with every build. The original key has an Android debug certificate name, but this release uses the non-debuggable, optimized **release** build type. Keeping that original key preserves updates for existing users.
 
@@ -38,14 +38,16 @@ The signing certificate identifies the publisher and is public. The APK SHA-256 
 Set `ATHR_SIGNING_STORE` to the original keystore’s absolute path (on the current machine, `~/.android/debug.keystore`), plus the three alias/password variables above. Keep these in your shell or a file outside the repository. Then:
 
 ```sh
-# Example for the next release, after increasing the source versionCode to 20:
+# Example for the next release, after increasing the source versionCode to 21:
 JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./android/gradlew -p android assembleRelease \
-  -PathrVersionName=1.1.17 --console=plain
+  -PathrVersionName=1.1.18 --console=plain
 JAVA_HOME=/usr/lib/jvm/java-21-openjdk python3 scripts/prepare-release.py android/app/build/outputs/apk/release/app-release.apk
 ```
 
-Upload the three files from `android/app/build/release-upload/` to a draft release tagged `v1.1.17`, then publish it as Latest. The packaging script never pushes or uploads anything. `update.json` supplies the Android version code so local builds and release builds compare correctly. Older releases without that metadata use stable numeric tag comparison, then verify the APK’s actual version before installation.
+Upload the three files from `android/app/build/release-upload/` to a draft release tagged `v1.1.18`, then publish it as Latest. The packaging script never pushes or uploads anything. `update.json` supplies the Android version code so local builds and release builds compare correctly. Older releases without that metadata use stable numeric tag comparison, then verify the APK’s actual version before installation.
 
 Release optimization enables R8 minification, optimization, and resource shrinking. Persistence model fields and Rust JNI entry points are preserved so optimization does not rename stored JSON keys or native method names. Artifact checks verify a higher version code, the original signing certificate, and that the APK is not debuggable.
 
 Documentation: [GitHub Releases API](https://docs.github.com/en/rest/releases/releases#get-the-latest-release), [Android secure file sharing](https://developer.android.com/training/secure-file-sharing/setup-sharing).
+
+Before upload, the local source/push guard and APK packaging check scan for saved account credentials, JWT/Bearer literals, common API-key formats, and private signing keys. APK account-value checks include UTF-8 and UTF-16 strings. Checks report paths and reasons without printing matched secrets. Signing keys and local session/capture files remain outside the release.

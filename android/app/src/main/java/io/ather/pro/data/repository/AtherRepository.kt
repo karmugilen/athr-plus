@@ -21,6 +21,7 @@ import io.ather.pro.domain.charging.RemoteChargingGateway
 import io.ather.pro.domain.model.ConnectionStatus
 import io.ather.pro.domain.model.RemoteChargingCommand
 import io.ather.pro.domain.model.RemoteCommandPhase
+import io.ather.pro.domain.monitoring.MonitoringCadence
 import io.ather.pro.domain.model.ScooterDashboardState
 import io.ather.pro.domain.model.ScooterModel
 import io.ather.pro.domain.model.ScooterSettings
@@ -36,6 +37,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -58,6 +62,11 @@ class AtherRepository(
     private val preferences = appContext?.getSharedPreferences("ather_dashboard_settings", Context.MODE_PRIVATE)
     private val chargeLimitStore: ChargeLimitStore? = appContext?.let(::ChargeLimitStore)
     private val savedReadings: SavedScooterReadingStore? = savedReadingStore ?: appContext?.let { SavedScooterReadingPrefs(it, clock) }
+    private val riderInsights = io.ather.pro.data.insights.RiderInsightsRepository(appContext)
+    override val insights = riderInsights.state
+
+    override fun updateDailyPlan(distanceKm: Double, reserve: Int) { scope.launch { riderInsights.updatePlan(distanceKm, reserve) } }
+    override fun setTyreReminders(enabled: Boolean) { scope.launch { riderInsights.setTyreReminders(enabled) } }
     private var lastReadingSaveAt = 0L
     private val chargingDispatcher = RemoteChargingDispatcher(
         gateway = remoteChargingGateway ?: api.asRemoteChargingGateway(),
@@ -126,10 +135,21 @@ class AtherRepository(
     init {
         INSTANCE = this
         commandTimeoutJob = scope.launch {
-            while (isActive) {
-                delay(1_000L)
-                tickRemoteChargingTimeouts()
-                tickChargeMonitoring()
+            combine(dashboard, chargeLimit) { state, limit ->
+                // Restart the timer for lifecycle/command changes, not every telemetry packet.
+                Triple(state.connection, state.remoteChargingCommand, limit.enabled)
+            }.distinctUntilChanged().collectLatest { (connection, command, limitEnabled) ->
+                while (isActive) {
+                    delay(MonitoringCadence.nextTickDelayMs(
+                        limitEnabled = limitEnabled,
+                        commandPending = command.phase == RemoteCommandPhase.SENDING ||
+                            command.phase == RemoteCommandPhase.ACCEPTED,
+                        connectedAtMs = snapshotConnectedAt.takeIf { connection == ConnectionStatus.CONNECTED },
+                        nowMs = clock()
+                    ))
+                    tickRemoteChargingTimeouts()
+                    tickChargeMonitoring()
+                }
             }
         }
     }
@@ -155,6 +175,7 @@ class AtherRepository(
         authInvalidated = false
         _authenticationRequired.value = null
         if (changed) {
+            riderInsights.selectVehicle(uuid)
             generation += 1
             evidence = ChargingEvidence()
             chargeSession.resetRate()
@@ -175,6 +196,7 @@ class AtherRepository(
 
     @Synchronized
     fun clearCredentials() {
+        riderInsights.selectVehicle(null)
         generation += 1
         evidence = ChargingEvidence()
         chargeSession.resetRate()
@@ -271,11 +293,11 @@ class AtherRepository(
     }
 
     private fun loadOfficialRides(scooterId: String) {
-        val (token, _) = requireCredentials() ?: return
+        val (token, selectedVehicle) = requireCredentials() ?: return
         api.fetchRides(token = token, scooterId = scooterId) { result ->
             scope.launch {
                 storageReady.await()
-                if (authToken != token) return@launch
+                if (authToken != token || vehicleUuid != selectedVehicle) return@launch
                 result.onSuccess { mapped ->
                     val priced = _dashboard.value
                     val officialRides = mapped.map { fields ->
@@ -285,6 +307,7 @@ class AtherRepository(
                     val merged = (officialRides + localRides).distinctBy(TripRecord::id)
                         .sortedByDescending(TripRecord::startTimeMs).take(100)
                     _dashboard.update { it.copy(recentTrips = merged) }
+                    riderInsights.reviewTrips(merged, clock())
                     persist { saveTrips(merged) }
                 }.onFailure { error ->
                     if (isAuthFailureMessage(error.message.orEmpty())) handleAuthFailure(error.message.orEmpty())
@@ -480,6 +503,8 @@ class AtherRepository(
             )
         }
         processChargeLimit(now)
+        riderInsights.observe(rawTelemetry, snapshot, now, _chargeLimit.value)
+        riderInsights.confirmCutoff(_chargeLimit.value)
     }
 
     private fun loadChargeLimitForVehicle(uuid: String) {
@@ -491,6 +516,7 @@ class AtherRepository(
         val saved = chargeLimitStore?.save(uuid, next) ?: true
         _chargeLimit.value = if (saved) next else next.copy(status = ChargeLimitController.Status.ERROR,
             armed = false, message = "Could not save the charge limit. Free phone storage and retry.")
+        riderInsights.confirmCutoff(_chargeLimit.value)
         return saved
     }
 

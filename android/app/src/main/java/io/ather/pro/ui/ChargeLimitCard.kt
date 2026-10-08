@@ -54,14 +54,14 @@ fun ChargeLimitCard(
     fun at(time: Long) = clockFormat.format(Date(time))
     fun remaining(until: Long): String {
         val minutes = ceil((until - now).coerceAtLeast(0L) / 60_000.0).toInt()
-        return if (minutes == 0) "now" else if (minutes < 60) "about $minutes min" else
-            "about ${minutes / 60} h ${minutes % 60} min"
+        return if (minutes == 0) "<1 min" else if (minutes < 60) "$minutes min" else
+            "${minutes / 60} h ${minutes % 60} min"
     }
     val pending = snapshot.status == ChargeLimitController.Status.PENDING
     val status = when (snapshot.status) {
         ChargeLimitController.Status.DISABLED -> "Off"
         ChargeLimitController.Status.MONITORING -> "Monitoring"
-        ChargeLimitController.Status.PENDING -> "Waiting for scooter confirmation"
+        ChargeLimitController.Status.PENDING -> "Confirming stop…"
         ChargeLimitController.Status.CONFIRMED -> "Stop confirmed"
         ChargeLimitController.Status.ERROR -> "Needs attention"
     }
@@ -69,7 +69,7 @@ fun ChargeLimitCard(
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Automatic charge limit", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Charge limit", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(if (snapshot.enabled) "${snapshot.percent}% · $status" else status,
                         style = MaterialTheme.typography.bodySmall,
                         color = if (snapshot.status == ChargeLimitController.Status.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary)
@@ -86,54 +86,42 @@ fun ChargeLimitCard(
                     FilterChip(selected = selected == target, onClick = { selected = target }, label = { Text("$target%") })
                 }
             }
-            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(16.dp)) {
+            Surface(color = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer, shape = RoundedCornerShape(16.dp)) {
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (estimate != null) {
-                        Text("Estimated $selected%: ${at(estimate.targetAtMs)}",
-                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                        Text("${remaining(estimate.targetAtMs)} · ${estimate.accuracyPercent}% accuracy",
-                            style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                        Text(estimate.basisLabel, style = MaterialTheme.typography.bodySmall)
-                        val timerArmed = shown.timerArmed
-                        Text((if (timerArmed) "Scheduled Pause: " else "Pause preview: ") +
-                            "${at(estimate.stopAtMs)} (${remaining(estimate.stopAtMs)})",
-                            style = MaterialTheme.typography.bodySmall)
-                        Text(if (timerArmed) "Timer armed" else if (!snapshot.enabled || unapplied)
-                            "Preview only — apply the limit to arm it" else if (pending)
-                            "Stop requested — waiting for confirmation" else "Timer not armed",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (timerArmed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (!active) Text("If charging starts now. The timer waits for reported charging.",
-                            style = MaterialTheme.typography.bodySmall)
-                        else if (snapshot.enabled && !unapplied && snapshot.estimate == null) {
-                            Text("Waiting for a newer charging reading to arm the timer.", style = MaterialTheme.typography.bodySmall)
-                        }
+                        Text("~${at(estimate.targetAtMs)}", style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold)
+                        Text("$selected% in ${remaining(estimate.targetAtMs)}", style = MaterialTheme.typography.bodyMedium)
+                        Text(when {
+                            shown.timerArmed -> "Auto-stop ~${at(estimate.stopAtMs)}"
+                            !snapshot.enabled || unapplied -> "Preview · apply to enable"
+                            pending -> "Waiting for stop confirmation"
+                            !active -> "Waiting for charging"
+                            else -> "Waiting for a fresh reading"
+                        }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         if (active && reportedAt != null && now - reportedAt > 30_000L) {
                             val age = ceil((now - reportedAt).coerceAtLeast(0L) / 60_000.0).toInt()
-                            Text("Based on a $age min old battery reading; assumes charging continued.",
-                                style = MaterialTheme.typography.bodySmall)
+                            Text("Reading $age min ago", style = MaterialTheme.typography.labelSmall)
                         }
-                        Text("Approximate. Fallback stops slightly early; final charge may differ from $selected%.",
-                            style = MaterialTheme.typography.bodySmall)
                     } else {
-                        Text("No charging speed yet. After one charge, the time starts from that speed and gets closer on later charges.",
+                        Text("Time estimate available after charging starts",
                             style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
             Button(onClick = { onPercentChange(selected, snapshot.chargerPowerW) }, modifier = Modifier.fillMaxWidth(),
                 enabled = !pending && (!snapshot.enabled || unapplied)) {
-                Text(if (snapshot.enabled) "Apply $selected% limit" else "Enable $selected% limit")
+                Text(if (snapshot.enabled) "Apply $selected%" else "Enable limit")
             }
             if (snapshot.enabled && unapplied) Text("New target has not been applied.", style = MaterialTheme.typography.bodySmall)
-            snapshot.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             if (snapshot.status == ChargeLimitController.Status.ERROR) {
-                OutlinedButton(onClick = onRetry) { Text("Retry stop at ${snapshot.percent}%") }
+                Text("Stop not confirmed · check scooter", color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = onRetry) { Text("Retry stop") }
             }
-            Text("Checks every 5 seconds. Sends Pause when a fresh reading reaches your target or the estimated fallback time arrives. Keep this phone online; turn the limit off to end monitoring.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (snapshot.enabled) Text("Turn the limit off before resuming a charge above ${snapshot.percent}%.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (snapshot.enabled) Text("5 sec checks · keep phone online",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

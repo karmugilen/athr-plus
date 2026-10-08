@@ -12,6 +12,9 @@ class AtherDashboardViewModel(
 ) : ViewModel() {
     val dashboard: StateFlow<ScooterDashboardState> = repository.dashboard
     val chargeLimit: StateFlow<ChargeLimitController.Snapshot> = repository.chargeLimit
+    val insights = repository.insights
+    fun updateDailyPlan(distanceKm: Double, reserve: Int) = repository.updateDailyPlan(distanceKm, reserve)
+    fun setTyreReminders(enabled: Boolean) = repository.setTyreReminders(enabled)
 
     fun refresh() = repository.refresh()
 

@@ -1,4 +1,4 @@
-package io.ather.pro.ui.maps
+package io.ather.pro.ui
 
 import android.app.Activity
 import android.content.Context
@@ -10,9 +10,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
-/** Request the fastest supported rate up to 144 Hz only while a map is resumed. */
+/** Request the fastest supported rate up to 144 Hz while the app is resumed. */
 @Composable
-fun MapRefreshRate() {
+fun AppRefreshRate() {
     val view = LocalView.current
     val owner = LocalLifecycleOwner.current
     DisposableEffect(view, owner) {
@@ -29,7 +29,6 @@ fun MapRefreshRate() {
                     it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight
                 }
                 val target = modes.filter { it.refreshRate <= 144.5f }.maxByOrNull { it.refreshRate }
-                    ?: modes.minByOrNull { it.refreshRate }
                     ?: return
                 attributes.preferredRefreshRate = target.refreshRate
                 // Android 8–10 also use the explicit display mode for high refresh rates.

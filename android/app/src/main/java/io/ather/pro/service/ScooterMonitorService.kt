@@ -21,6 +21,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
 
 /** One foreground service owns continuous cloud telemetry, including when the UI closes. */
 class ScooterMonitorService : Service() {
@@ -58,16 +60,21 @@ class ScooterMonitorService : Service() {
             observing = true
             observeNetwork()
             scope.launch {
-                while (isActive) {
-                    val state = appContainer.repository.dashboard.value
-                    val limit = appContainer.repository.chargeLimit.value
+                val clockTicks = flow {
+                    while (isActive) {
+                        emit(System.currentTimeMillis())
+                        delay(60_000L)
+                    }
+                }
+                combine(appContainer.repository.dashboard, appContainer.repository.chargeLimit, clockTicks) {
+                    state, limit, _ -> state to limit
+                }.collect { (state, limit) ->
                     keepCutoffAwake(limit.enabled && appContainer.monitoring.requested)
                     val notice = MonitorNotice.from(System.currentTimeMillis(), state, limit)
                     if (notice != previousNotice) {
                         notifications.notify(NOTIFICATION_ID, MonitorNotification.build(this@ScooterMonitorService, notice))
                         previousNotice = notice
                     }
-                    delay(1_000)
                 }
             }
         }

@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private val updateViewModel: AppUpdateViewModel by viewModels { AppUpdateViewModel.Factory(updates) }
     private var openUpdates by mutableStateOf(false)
     private var canInstallUpdates by mutableStateOf(false)
+    private var openInsightsRequest by mutableStateOf(0)
 
 
     private val permissionLauncher = registerForActivityResult(
@@ -63,6 +64,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         openUpdates = intent.getBooleanExtra(GithubAppUpdateRepository.OPEN_UPDATES, false)
+        if (intent.getBooleanExtra("open_insights", false)) openInsightsRequest++
         enableEdgeToEdge()
 
         ChargingNotificationManager.getInstance(applicationContext).createNotificationChannels()
@@ -84,10 +86,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AtherProTheme {
+                io.ather.pro.ui.AppRefreshRate()
                 val appUpdate by updateViewModel.state.collectAsStateWithLifecycle()
                 val authState by authViewModel.ui.collectAsStateWithLifecycle()
                 val dashboard by dashboardViewModel.dashboard.collectAsStateWithLifecycle()
                 val chargeLimit by dashboardViewModel.chargeLimit.collectAsStateWithLifecycle()
+                val insights by dashboardViewModel.insights.collectAsStateWithLifecycle()
                 val monitoring by appContainer.monitoring.state.collectAsStateWithLifecycle()
 
                 Surface(
@@ -143,6 +147,10 @@ class MainActivity : ComponentActivity() {
                                 dashboardViewModel.setChargeLimit(true, percent, power)
                             },
                             onChargeLimitRetry = dashboardViewModel::retryChargeLimit,
+                            insights = insights,
+                            onDailyPlanChange = dashboardViewModel::updateDailyPlan,
+                            onTyreRemindersChange = dashboardViewModel::setTyreReminders,
+                            openInsightsRequest = openInsightsRequest,
                             onLogout = authViewModel::logout
                         )
                     }
@@ -181,6 +189,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.getBooleanExtra(GithubAppUpdateRepository.OPEN_UPDATES, false)) openUpdates = true
+        if (intent.getBooleanExtra("open_insights", false)) openInsightsRequest++
     }
 
     override fun onStart() {

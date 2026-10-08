@@ -37,9 +37,6 @@ internal fun MonitoringCard(state: MonitoringState, limitEnabled: Boolean, onCha
                 }
                 Switch(checked = state.alwaysEnabled, onCheckedChange = onChange)
             }
-            Text(if (state.alwaysEnabled) "Silent notification while charging. No ongoing notification when idle."
-                else if (limitEnabled) "Your charge limit enables charging checks in the background."
-                else "Enable automatic charge checks and widget updates after leaving the app.", style = MaterialTheme.typography.bodySmall)
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
                 TextButton(onClick = {
@@ -49,8 +46,7 @@ internal fun MonitoringCard(state: MonitoringState, limitEnabled: Boolean, onCha
             TextButton(onClick = {
                 context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
             }) { Text("Android battery & background settings") }
-            Text("Idle checks run about every 15 minutes and Android may delay them. Open the app when plugging in for immediate monitoring. Force-stop prevents checks until the app is opened again.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
         }
     }
 }

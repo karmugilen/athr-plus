@@ -44,11 +44,16 @@ spec = importlib.util.spec_from_file_location('secret_guard', ROOT / 'scripts/se
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 private_values = guard.known_secrets()
+# Resource strings may be UTF-16; DEX strings and assets commonly use UTF-8.
+private_values += [value.decode().encode(encoding) for value in list(private_values)
+                   for encoding in ('utf-16-le', 'utf-16-be')]
 with zipfile.ZipFile(args.apk) as archive:
     for entry in archive.namelist():
         content = archive.read(entry)
-        if any(value in content for value in private_values):
-            parser.error('Private account data found in APK. Release blocked.')
+        failure = guard.reason(entry, content, private_values)
+        if failure:
+            parser.error(f'APK blocked: {entry}: {failure}.')
+print('PASS: APK entries scanned for saved credentials, token patterns, API keys and private keys.')
 
 args.output.mkdir(parents=True, exist_ok=True)
 name = f'Athr+-v{version}-release.apk'

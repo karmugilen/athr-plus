@@ -92,7 +92,6 @@ private fun ChargingActions(
     val isCharging = view.activelyCharging
     val chargerConnected = view.pluggedIn
     val normalizedStatus = view.statusLabel
-    val command = view.command
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -115,7 +114,7 @@ private fun ChargingActions(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "CHARGING ACTIONS",
+                        text = "Charging",
                         color = colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall
                     )
@@ -155,19 +154,6 @@ private fun ChargingActions(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            Text(
-                text = command.message ?: if (isCharging) {
-                    "Vehicle is actively drawing power. You can pause the charging session remotely."
-                } else {
-                    "Vehicle charging is currently idle or paused. Tap below to resume charging."
-                },
-                color = colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-                lineHeight = 16.sp
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
             // Every deliberate tap is actionable. The dispatcher replaces a stalled
             // pending request, while requestedAt matching ignores its late callback.
             val stopEnabled = !view.commandPending
@@ -201,7 +187,7 @@ private fun ChargingActions(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Stop / Pause",
+                        text = "Pause",
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1
                     )
@@ -231,7 +217,7 @@ private fun ChargingActions(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Start / Resume",
+                        text = "Resume",
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1
                     )
@@ -242,7 +228,7 @@ private fun ChargingActions(
                 RemoteCommandPhase.SENDING -> {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = view.message ?: "Dispatching request to server…",
+                        text = "Sending…",
                         color = colorScheme.tertiary,
                         style = MaterialTheme.typography.labelSmall
                     )
@@ -250,8 +236,7 @@ private fun ChargingActions(
                 RemoteCommandPhase.ACCEPTED -> {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = view.message
-                            ?: "Request accepted — waiting for scooter telemetry confirmation…",
+                        text = "Waiting for scooter confirmation…",
                         color = colorScheme.tertiary,
                         style = MaterialTheme.typography.labelSmall
                     )
@@ -262,7 +247,7 @@ private fun ChargingActions(
                 RemoteCommandPhase.ERROR -> {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = view.message ?: "Request failed or timed out — you can retry.",
+                        text = "Request failed · try again",
                         color = colorScheme.error,
                         style = MaterialTheme.typography.labelSmall
                     )
@@ -273,7 +258,7 @@ private fun ChargingActions(
                 RemoteCommandPhase.CONFIRMED -> {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = view.message ?: "Scooter confirmed the charging change.",
+                        text = "Confirmed",
                         color = colorScheme.secondary,
                         style = MaterialTheme.typography.labelSmall
                     )

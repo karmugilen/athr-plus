@@ -24,10 +24,13 @@ import io.ather.pro.domain.monitoring.MonitoringState
 import io.ather.pro.ui.components.ChargeEstimateCard
 import io.ather.pro.ui.components.FreshnessLabel
 import io.ather.pro.ui.update.AppUpdateBanner
+import io.ather.pro.domain.insights.RiderInsights
+import io.ather.pro.ui.insights.RiderInsightsScreen
+import io.ather.pro.ui.insights.ChargingHistoryCard
 
 private enum class Destination(val label: String, val icon: ImageVector) {
     HOME("Home", Icons.Default.Home), CHARGING("Charging", Icons.Default.BatteryChargingFull),
-    MAP("Map", Icons.Default.Map), SETTINGS("Settings", Icons.Default.Settings)
+    MAP("Map", Icons.Default.Map), INSIGHTS("Insights", Icons.Default.Insights), SETTINGS("Settings", Icons.Default.Settings)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,9 +54,14 @@ fun AtherAppShell(
     onChargeLimitEnabledChange: (Boolean) -> Unit,
     onChargeLimitPercentChange: (Int, Int) -> Unit,
     onChargeLimitRetry: () -> Unit,
+    insights: RiderInsights,
+    onDailyPlanChange: (Double, Int) -> Unit,
+    onTyreRemindersChange: (Boolean) -> Unit,
+    openInsightsRequest: Int = 0,
     onLogout: () -> Unit
 ) {
     var selected by rememberSaveable { mutableStateOf(Destination.HOME) }
+    LaunchedEffect(openInsightsRequest) { if (openInsightsRequest > 0) selected = Destination.INSIGHTS }
     val stateHolder = rememberSaveableStateHolder()
     Scaffold(
         topBar = {
@@ -87,15 +95,17 @@ fun AtherAppShell(
                         Destination.CHARGING -> LazyColumn(contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             item { FreshnessLabel(dashboard) }
                             item { ChargeLimitCard(chargeLimit, dashboard, onChargeLimitEnabledChange, onChargeLimitPercentChange, onChargeLimitRetry) }
-                            item { ChargeEstimateCard(dashboard, chargeLimit.percent) }
                             item { ChargingActions(dashboard.telemetry, dashboard.remoteChargingCommand,
                                 onPauseCharging, onResumeCharging, onRetryLatch = onClearRemoteChargingLatch) }
-                            item { MonitoringCard(monitoring, chargeLimit.enabled, onMonitoringChange) }
+                            item { ChargeEstimateCard(dashboard, chargeLimit.percent) }
+                            item { ChargingHistoryCard(insights) }
                         }
                         Destination.MAP -> LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             item { FreshnessLabel(dashboard) }
                             item { MapSection(gps = dashboard.telemetry?.gps, gpsUpdatedAt = dashboard.gpsUpdatedAt) }
                         }
+                        Destination.INSIGHTS -> RiderInsightsScreen(insights, dashboard, onDailyPlanChange,
+                            onTyreRemindersChange)
                         Destination.SETTINGS -> SettingsScreen(session, dashboard, monitoring, chargeLimit.enabled,
                             updateState, onCheckUpdate, onOpenUpdate, onMonitoringChange, onModelChange, onTariffChange, onLogout)
                     }

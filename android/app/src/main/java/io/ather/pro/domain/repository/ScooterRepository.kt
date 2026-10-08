@@ -9,6 +9,9 @@ interface ScooterRepository {
     val dashboard: StateFlow<ScooterDashboardState>
 
     val chargeLimit: StateFlow<ChargeLimitController.Snapshot>
+    val insights: StateFlow<io.ather.pro.domain.insights.RiderInsights>
+    fun updateDailyPlan(distanceKm: Double, reserve: Int)
+    fun setTyreReminders(enabled: Boolean)
 
     fun refresh()
 

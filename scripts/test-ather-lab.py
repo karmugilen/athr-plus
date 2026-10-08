@@ -302,6 +302,19 @@ class GitGuardTests(unittest.TestCase):
         self.assertIsNotNone(guard.reason("notes.txt", token.encode(), [token.encode()]))
         self.assertIsNone(guard.reason("notes.txt", b"ordinary source", [token.encode()]))
 
+    def test_common_api_credentials_and_private_keys_are_detected(self):
+        credentials = [b"ghp_" + b"a" * 36, b"github_pat_" + b"a" * 50,
+                       b"AIza" + b"a" * 35, b"AKIA" + b"A" * 16,
+                       b"api_key = '" + b"x" * 40 + b"'",
+                       b"-----BEGIN " + b"RSA PRIVATE KEY-----"]
+        for value in credentials:
+            self.assertIsNotNone(guard.reason("classes.dex", value, []))
+        self.assertIsNone(guard.reason("client.kt", b'header("Authorization", "Bearer " + token)', []))
+
+    def test_signing_key_containers_are_blocked(self):
+        self.assertIsNotNone(guard.reason("assets/signing.keystore", b"binary", []))
+        self.assertIsNone(guard.reason("META-INF/CERT.RSA", b"public signature", []))
+
 
 if __name__ == "__main__":
     unittest.main()

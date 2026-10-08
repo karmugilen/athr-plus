@@ -12,6 +12,10 @@
 -keep,allowoptimization class io.ather.pro.domain.range.RideModeRange { *; }
 -keep,allowoptimization class io.ather.pro.domain.charging.ChargeTimeEstimate { *; }
 -keep,allowoptimization class io.ather.pro.domain.update.AppRelease { *; }
+-keep,allowoptimization class io.ather.pro.domain.insights.RiderInsights { *; }
+-keep,allowoptimization class io.ather.pro.domain.insights.ChargeSession { *; }
+-keep,allowoptimization class io.ather.pro.domain.insights.ParkedPeriod { *; }
+-keep,allowoptimization class io.ather.pro.domain.insights.BatteryObservation { *; }
 
 # Exported Rust symbols use this exact Kotlin/JVM class and method names.
 -keep,allowoptimization class io.ather.pro.data.computation.RustTelemetryMath { *; }

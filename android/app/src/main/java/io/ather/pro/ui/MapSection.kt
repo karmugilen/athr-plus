@@ -15,6 +15,8 @@ import android.hardware.SensorManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.location.LocationRequest
+import android.os.Looper
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -84,6 +86,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.ather.pro.domain.model.GpsData
 import io.ather.pro.ui.maps.StreetMapView
@@ -93,10 +96,6 @@ import io.ather.pro.ui.maps.HeadingSampleGate
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
-import kotlin.math.sqrt
 import kotlinx.coroutines.delay
 
 @SuppressLint("SetJavaScriptEnabled", "MissingPermission")
@@ -131,21 +130,25 @@ fun MapSection(
     var compassAvailable by remember { mutableStateOf(false) }
     var showCompassHelp by remember { mutableStateOf(false) }
     var freshnessTick by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1_000L)
-            freshnessTick += 1L
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                freshnessTick += 1L
+                delay(1_000L)
+            }
         }
     }
     val nowNs = remember(phoneLocation, compassReading, freshnessTick) { SystemClock.elapsedRealtimeNanos() }
-    val phoneFix = phoneLocation?.takeIf {
-        CompassHeading.isFresh(it.elapsedRealtimeNanos, nowNs, CompassHeading.LOCATION_MAX_AGE_NS)
-    }
+    // Retain the last position through reception gaps; label its age instead of hiding it.
+    val phoneFix = phoneLocation
+    val phoneFixAgeSeconds = phoneFix?.let { ((nowNs - it.elapsedRealtimeNanos) / 1_000_000_000L).coerceAtLeast(0L) }
     val phoneLat = phoneFix?.latitude
     val phoneLng = phoneFix?.longitude
     val phoneAcc = phoneFix?.takeIf { it.hasAccuracy() }?.accuracy
     val phoneAlt = phoneFix?.takeIf { it.hasAltitude() && it.altitude.isFinite() }?.altitude ?: 0.0
     var hasLocationPermission by remember { mutableStateOf(checkLocationPermission(context)) }
+    var hasPreciseLocationPermission by remember { mutableStateOf(ContextCompat.checkSelfPermission(context,
+        Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) }
     var locationServicesOn by remember { mutableStateOf(checkLocationServicesEnabled(context)) }
 
     // Never substitute the scooter's position or (0,0) for the phone's north correction.
@@ -302,9 +305,10 @@ fun MapSection(
         }
 
         fun applyFix(location: Location) {
-            if (!CompassHeading.validCoordinates(location.latitude, location.longitude)) return
-            if (!CompassHeading.isFresh(location.elapsedRealtimeNanos, SystemClock.elapsedRealtimeNanos(),
-                    CompassHeading.LOCATION_MAX_AGE_NS)) return
+            if (!location.latitude.isFinite() || location.latitude !in -90.0..90.0 ||
+                !location.longitude.isFinite() || location.longitude !in -180.0..180.0) return
+            // Show Android's coordinates directly. Only ignore an older provider/cached callback.
+            if (phoneLocation?.let { location.elapsedRealtimeNanos < it.elapsedRealtimeNanos } == true) return
             phoneLocation = Location(location)
         }
 
@@ -325,6 +329,8 @@ fun MapSection(
                         subscribed = false
                     }
                     clearPhoneFix()
+                } else {
+                    refreshSubscription()
                 }
             }
         }
@@ -338,6 +344,8 @@ fun MapSection(
         @SuppressLint("MissingPermission")
         refreshSubscription = {
             hasLocationPermission = checkLocationPermission(context)
+            hasPreciseLocationPermission = ContextCompat.checkSelfPermission(context,
+                Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
             locationServicesOn = checkLocationServicesEnabled(context)
             if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) ||
                 !hasLocationPermission || !locationServicesOn || locationManager == null) {
@@ -346,28 +354,33 @@ fun MapSection(
             } else {
                 unsubscribe()
                 try {
+                    val fusedEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        runCatching { locationManager.isProviderEnabled(LocationManager.FUSED_PROVIDER) }.getOrDefault(false)
                     val providers = buildList {
-                        add(LocationManager.GPS_PROVIDER)
+                        if (fusedEnabled) add(LocationManager.FUSED_PROVIDER)
+                        if (hasPreciseLocationPermission) add(LocationManager.GPS_PROVIDER)
                         add(LocationManager.NETWORK_PROVIDER)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            add(LocationManager.FUSED_PROVIDER)
-                        }
                     }
-                    var best: Location? = null
+                    val cached = mutableListOf<Location>()
                     for (provider in providers) {
                         val enabled = runCatching { locationManager.isProviderEnabled(provider) }.getOrDefault(false)
                         if (!enabled) continue
                         // Refresh fix age even while stationary; heading needs a current phone reference.
-                        locationManager.requestLocationUpdates(provider, 1_000L, 0f, locationListener)
+                        try { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            val request = LocationRequest.Builder(1_000L)
+                                .setMinUpdateIntervalMillis(1_000L)
+                                .setMinUpdateDistanceMeters(0f)
+                                .setMaxUpdateDelayMillis(0L)
+                                .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY).build()
+                            locationManager.requestLocationUpdates(provider, request, context.mainExecutor, locationListener)
+                        } else locationManager.requestLocationUpdates(provider, 1_000L, 0f, locationListener, Looper.getMainLooper())
+                        } catch (_: IllegalArgumentException) { continue }
                         subscribed = true
                         val last = runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
-                        val age = last?.let { (SystemClock.elapsedRealtimeNanos() - it.elapsedRealtimeNanos) / 1_000_000L }
-                        if (last != null && age != null && age in 0L..120_000L &&
-                            (best == null || last.accuracy < best.accuracy)) {
-                            best = last
-                        }
+                        val ageNs = last?.let { SystemClock.elapsedRealtimeNanos() - it.elapsedRealtimeNanos }
+                        if (last != null && ageNs != null && ageNs in 0L..300_000_000_000L) cached += last
                     }
-                    best?.let(::applyFix)
+                    cached.maxByOrNull { it.elapsedRealtimeNanos }?.let(::applyFix)
                 } catch (_: SecurityException) {
                     hasLocationPermission = false
                     unsubscribe()
@@ -410,14 +423,7 @@ fun MapSection(
     // Distance calculation between Phone and Ather (Haversine formula)
     val distanceMeters: Double? = remember(phoneLat, phoneLng, atherLat, atherLng) {
         if (phoneLat != null && phoneLng != null && atherLat != null && atherLng != null) {
-            val r = 6371000.0 // Earth radius in meters
-            val dLat = Math.toRadians(atherLat - phoneLat!!)
-            val dLng = Math.toRadians(atherLng - phoneLng!!)
-            val a = sin(dLat / 2) * sin(dLat / 2) +
-                    cos(Math.toRadians(phoneLat!!)) * cos(Math.toRadians(atherLat)) *
-                    sin(dLng / 2) * sin(dLng / 2)
-            val c = 2 * atan2(sqrt(a), sqrt(1 - a))
-            r * c
+            io.ather.pro.domain.location.distanceMeters(phoneLat, phoneLng, atherLat, atherLng)
         } else null
     }
 
@@ -698,11 +704,12 @@ fun MapSection(
                 modifier = Modifier.fillMaxWidth().clickable { showCompassHelp = true }
             )
 
-            if (!hasLocationPermission || !locationServicesOn) {
+            if (!hasPreciseLocationPermission || !locationServicesOn) {
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = when {
                         !hasLocationPermission -> "Location permission is off — allow location for this app"
+                        !hasPreciseLocationPermission -> "Approximate location is enabled — tap to allow precise location"
                         else -> "Location is not turned on"
                     },
                     color = colorScheme.error,
@@ -713,7 +720,7 @@ fun MapSection(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            val intent = if (!hasLocationPermission) {
+                            val intent = if (!hasPreciseLocationPermission) {
                                 Intent(
                                     Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                                     Uri.fromParts("package", context.packageName, null)
@@ -781,6 +788,9 @@ fun MapSection(
                         val phoneStatus = when {
                             !hasLocationPermission -> "Permission off"
                             !locationServicesOn -> "Location off"
+                            phoneFixAgeSeconds != null && phoneFixAgeSeconds > 15 ->
+                                if (phoneFixAgeSeconds < 60) "Last position · ${phoneFixAgeSeconds}s ago"
+                                else "Last position · ${phoneFixAgeSeconds / 60} min ago"
                             phoneLat != null && phoneAcc != null -> {
                                 val a = phoneAcc!!
                                 val accText = if (a < 1.0f) {

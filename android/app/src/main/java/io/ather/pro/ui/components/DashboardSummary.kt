@@ -185,21 +185,19 @@ fun ChargeEstimateCard(state: ScooterDashboardState, target: Int) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Charge to $target%", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             if (estimate == null) {
-                Text("Waiting for a battery reading to estimate your charge.", style = MaterialTheme.typography.bodyMedium)
+                Text("Waiting for battery reading", style = MaterialTheme.typography.bodyMedium)
             } else {
                 val soc = state.telemetry?.batterySoc ?: 0.0
-                Text("${number(soc)}% reported · ${number(estimate.remainingPercent)}% to go", style = MaterialTheme.typography.bodyMedium)
+                Text("${number(soc)}% · ${number(estimate.remainingPercent)}% to go", style = MaterialTheme.typography.bodyMedium)
                 LinearProgressIndicator(progress = { (soc / target.coerceAtLeast(1)).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     EstimateValue("Energy", "${number(estimate.energyKWh, 2)} kWh")
-                    EstimateValue("Cost", "₹${number(estimate.costInr, 1)}")
-                    EstimateValue("Range at target", "${number(estimate.rangeAtTargetKm)} km")
+                    EstimateValue("Est. cost", "₹${number(estimate.costInr, 1)}")
+                    EstimateValue("Est. range", "${number(estimate.rangeAtTargetKm)} km")
                 }
                 if (cloudMinutes != null) {
                     Text("About ${cloudMinutes.roundToInt()} min to target", style = MaterialTheme.typography.bodyMedium)
                 }
-                Text("Estimates use your scooter’s range and pack size. Cost excludes charging losses.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

@@ -20,7 +20,6 @@ import io.ather.pro.BuildConfig
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun StreetMapView(modifier: Modifier = Modifier, onReady: (WebView?) -> Unit) {
-    MapRefreshRate()
     val currentOnReady by rememberUpdatedState(onReady)
     var mapView by remember { mutableStateOf<WebView?>(null) }
     val owner = LocalLifecycleOwner.current

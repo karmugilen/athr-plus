@@ -34,3 +34,4 @@ charge-limit.lock
 
 # Native build artifacts
 rust/target/
+rust/ather-math/target/

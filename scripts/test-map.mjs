@@ -265,6 +265,18 @@ try {
   assert.equal(await evaluate('document.getElementById("empty-status").hidden'), true);
   console.log('PASS: missing or invalid GPS shows an empty state; valid fixes restore the map');
 
+  const instantPhone = await evaluate(`(() => {
+    const marker = Object.values(testMap._layers).find(layer => layer._icon?.querySelector('#phone-marker-icon'));
+    updatePhoneMarker(12.9741,77.5951,8);
+    const first = marker.getLatLng();
+    updatePhoneMarker(12.97415,77.59515,8);
+    const latest = marker.getLatLng();
+    return { first: { lat: first.lat, lng: first.lng }, latest: { lat: latest.lat, lng: latest.lng } };
+  })()`);
+  assert.deepEqual(instantPhone.first, { lat: 12.9741, lng: 77.5951 });
+  assert.deepEqual(instantPhone.latest, { lat: 12.97415, lng: 77.59515 });
+  console.log('PASS: phone marker displays each accepted fix immediately without interpolation');
+
   await send('Emulation.setDeviceMetricsOverride', { width: 400, height: 520, deviceScaleFactor: 1, mobile: true });
   await until('testMap.getSize().y === 520');
   await evaluate('fitBoth()');
