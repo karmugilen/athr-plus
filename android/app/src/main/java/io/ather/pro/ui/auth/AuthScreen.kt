@@ -52,7 +52,8 @@ fun AuthScreen(
     onVerifyOtp: () -> Unit,
     onSelectScooter: (DiscoveredScooter) -> Unit,
     onRetryScooters: () -> Unit,
-    onBackToPhone: () -> Unit
+    onBackToPhone: () -> Unit,
+    onImportSeed: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -141,6 +142,16 @@ fun AuthScreen(
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall
             )
+        }
+
+        if (state.step == AuthStep.PHONE) {
+            TextButton(
+                onClick = onImportSeed,
+                enabled = !state.isLoading,
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            ) {
+                Text("I have a session file — import it")
+            }
         }
     }
 }

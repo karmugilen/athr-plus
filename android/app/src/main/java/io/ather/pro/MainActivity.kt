@@ -119,7 +119,8 @@ class MainActivity : ComponentActivity() {
                                     onVerifyOtp = authViewModel::verifyOtp,
                                     onSelectScooter = authViewModel::selectScooter,
                                     onRetryScooters = authViewModel::retryScooters,
-                                    onBackToPhone = authViewModel::backToPhone
+                                    onBackToPhone = authViewModel::backToPhone,
+                                    onImportSeed = authViewModel::importSeed
                                 )
                             }
                         }

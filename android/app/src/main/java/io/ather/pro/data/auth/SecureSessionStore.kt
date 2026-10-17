@@ -36,6 +36,18 @@ class SecureSessionStore(context: Context) {
 
     fun current(): AuthSession? = _session.value
 
+    /**
+     * Imports a pending `ather_session.json` on demand — for example after the user copies the
+     * file into place while the app is already running. Returns the imported session, or null
+     * when there is nothing valid to import. See docs/SIGN-IN.md.
+     */
+    fun importSeedNow(): AuthSession? {
+        _session.value?.let { return it }
+        val imported = importUntrackedSeedIfPresent() ?: return null
+        save(imported)
+        return imported
+    }
+
     fun save(session: AuthSession) {
         val exp = session.expiresAtEpochSec ?: JwtExpiry.expiresAtEpochSec(session.token)
         prefs.edit()
