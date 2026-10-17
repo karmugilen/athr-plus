@@ -34,11 +34,11 @@ class AtherApiClient : AtherCloudApi {
     override fun connect(token: String, uuid: String, listener: AtherCloudApi.Listener): WebSocket {
         val request = Request.Builder()
             .url("wss://cerberus.ather.io/api/v1/ws/devices/shadows/onchange?uuid=$uuid")
-            .addHeader("Source", "ATHER_APP/13.2.0")
+            .addHeader("Source", "ATHER_APP/13.5.1")
             .addHeader("X-Platform", "Android")
             .addHeader("X-Platform-Version", "14")
             .addHeader("X-Device-Info", "Google Pixel 8 Pro")
-            .addHeader("User-Agent", "Ather/13.2.0 android/14 (Google Pixel 8 Pro)")
+            .addHeader("User-Agent", "Ather/13.5.1 android/14 (Google Pixel 8 Pro)")
             .addHeader("Authorization", "Bearer $token")
             .build()
 

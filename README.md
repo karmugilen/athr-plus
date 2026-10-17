@@ -16,6 +16,17 @@ Version **1.1.17 (build 20)** is a signed, non-debuggable release with R8 code o
 
 This version adds rider insights, ride-route history, clearer charging controls, direct phone-location updates, and app-wide refresh-rate requests up to 144 Hz on supported devices. Scooter snapshot checks remain every five seconds. Users on v1.1.16 can use **Settings → App updates → Check now** to see this release, review the notes, and choose whether to install it. Automatic checks run on opening the app at most once every six hours and approximately daily in the background; Android may delay background work. A source push alone does not trigger an app update. Users on v1.1.2 need to install an updater-enabled release manually once.
 
+## Sign-in status
+
+Ather's login service now accepts OTP sign-in **only from the official Ather app**: since the official app 13.x, every login request must carry a Firebase App Check attestation bound to the official app's package, signing certificate, and Ather's Firebase project. Athr+ cannot produce one, so SMS OTP sign-in cannot complete (the service answers with error codes 1013/1014). The old login routes that used to work answer "Outdated App version." for every client, so no version bump fixes this.
+
+What still works:
+
+- An existing signed-in session keeps working; telemetry, charging, and widgets use the session token, not the login routes.
+- You can import a session file captured from the official app on your own device. Athr+ reads `ather_session.json` automatically at start-up when you are not signed in, and the sign-in screen has an **"I have a session file — import it"** action. See [phone sign-in and session import](docs/SIGN-IN.md).
+
+Progress and discussion: [issue #8](https://github.com/karmugilen/athr-plus/issues/8).
+
 ## Support the project
 
 If you find the app useful, consider supporting the project.
@@ -43,7 +54,7 @@ So I created and open-sourced **Athr+** to give everyone full, unrestricted acce
 - **Compact home-screen widget:** battery, current range, clear per-mode range rows, sync time, connection status, and a limiter bar when enabled. Widget colors follow system appearance changes.
 - **Model-independent battery artwork:** an animated battery while charging and the original scooter launcher icon.
 - **Rust calculations:** native history selection, range scaling, and charging estimates for ARM and x86 devices.
-- **Phone sign-in:** searchable country calling codes (India +91 by default), international number paste, country-aware validation, and SMS code resend with a countdown. OTP delivery for each country depends on the account provider.
+- **Phone sign-in:** searchable country calling codes (India +91 by default), international number paste, country-aware validation, and SMS code resend with a countdown. OTP delivery for each country depends on the account provider. **Note:** Ather's servers now block OTP sign-in from third-party apps — see [sign-in status](#sign-in-status).
 - **Responsive phone location:** requests high-accuracy updates every second while the map is open and displays accepted fixes immediately. Shows Android coordinates directly without custom accuracy thresholds, movement filtering, or averaging. See [location behavior](docs/FIND-SCOOTER.md).
 - **Smooth scrolling and headings:** display-paced heading animation and app-wide requests for the fastest supported refresh rate up to 144 Hz while resumed. Actual frame rate depends on the device, Android settings, and WebView.
 - **Maps and ride analytics:** Leaflet street maps, vehicle heading, local trip history, and available battery/efficiency information.

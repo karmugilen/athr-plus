@@ -157,6 +157,29 @@ class AuthViewModel(
         _ui.value = AuthUiState()
     }
 
+    fun importSeed() {
+        if (_ui.value.isLoading) return
+        val imported = sessionStore.importSeedNow()
+        if (imported == null) {
+            _ui.update {
+                it.copy(
+                    errorMessage = "No valid ather_session.json found. Copy it to " +
+                        "Android/data/io.ather.pro/files/ather_session.json and try again."
+                )
+            }
+        } else {
+            repository.applyCredentials(imported.token, imported.vehicleUuid)
+            _ui.update {
+                it.copy(
+                    step = AuthStep.READY,
+                    session = imported,
+                    isLoading = false,
+                    errorMessage = null
+                )
+            }
+        }
+    }
+
     private fun discoverScooters(token: String, phone: String) {
         authApi.fetchScooters(token) { result ->
             result.fold(

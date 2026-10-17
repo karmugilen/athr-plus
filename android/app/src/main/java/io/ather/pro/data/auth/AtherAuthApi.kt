@@ -29,9 +29,12 @@ class AtherAuthApi(
         callback: (Result<Unit>) -> Unit
     ) {
         val payload = JsonObject().apply {
-            addProperty("email", "")
             addProperty("contact_no", phone)
             addProperty("country_code", countryCode)
+            add("notification_medium", JsonObject().apply {
+                addProperty("whatsapp", false)
+                addProperty("sms", true)
+            })
         }
         postJson(GENERATE_OTP_URL, payload, token = null) { result ->
             callback(result.map { })
@@ -45,10 +48,10 @@ class AtherAuthApi(
         callback: (Result<String>) -> Unit
     ) {
         val payload = JsonObject().apply {
-            addProperty("email", "")
             addProperty("contact_no", phone)
             addProperty("userOtp", otp)
-            addProperty("is_mobile_login", "true")
+            // The login service expects a boolean here; a string value is rejected.
+            addProperty("is_mobile_login", true)
             addProperty("country_code", countryCode)
         }
         postJson(VERIFY_OTP_URL, payload, token = null) { result ->
@@ -250,10 +253,23 @@ class AtherAuthApi(
                 response.use {
                     val body = it.body?.string().orEmpty()
                     if (!it.isSuccessful) {
-                        val message = runCatching {
+                        val errorJson = runCatching {
                             gson.fromJson(body, JsonObject::class.java)
-                                ?.text("message", "error", "msg")
-                        }.getOrNull() ?: "HTTP ${it.code}"
+                        }.getOrNull()
+                        val errorCode = runCatching {
+                            errorJson
+                                ?.get("errorCode")
+                                ?.takeIf { element -> element.isJsonPrimitive }
+                                ?.asInt
+                        }.getOrNull()
+                        if (errorCode == APP_CHECK_MISSING || errorCode == APP_CHECK_INVALID) {
+                            // The login routes demand a Firebase App Check attestation that only
+                            // the official Ather app can produce. Surface it as such instead of
+                            // the server's generic "try again" message.
+                            callback(Result.failure(AppCheckRequiredException(errorCode)))
+                            return
+                        }
+                        val message = errorJson?.text("message", "error", "msg") ?: "HTTP ${it.code}"
                         callback(Result.failure(IOException(message)))
                         return
                     }
@@ -271,7 +287,7 @@ class AtherAuthApi(
     }
 
     private fun extractToken(root: JsonObject): String? {
-        root.text("token")?.let { return it }
+        root.text("token", "access_token")?.let { return it }
         root.get("token")?.takeIf { it.isJsonObject }?.asJsonObject?.text("token", "access_token")
             ?.let { return it }
         root.get("data")?.takeIf { it.isJsonObject }?.asJsonObject?.text("token", "access_token")
@@ -319,11 +335,12 @@ class AtherAuthApi(
         addHeader("Accept", "application/json")
         addHeader("Accept-Charset", "UTF-8")
         addHeader("User-Agent", "ktor-client")
-        addHeader("Source", "ATHER_APP/13.2.0")
+        addHeader("Source", "ATHER_APP/$APP_VERSION")
         addHeader("X-Platform", "Android")
-        if (!token.isNullOrBlank()) {
-            addHeader("Authorization", "Bearer $token")
-        }
+        addHeader("X-Platform-Version", "14")
+        addHeader("X-Device-Info", "Google Pixel 8 Pro")
+        // Official clients always send this header, empty during login.
+        addHeader("Authorization", "Bearer ${token.orEmpty()}")
         return this
     }
 
@@ -339,8 +356,16 @@ class AtherAuthApi(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-        private const val GENERATE_OTP_URL = "https://cerberus.ather.io/auth/v2/generate-login-otp"
-        private const val VERIFY_OTP_URL = "https://cerberus.ather.io/auth/v2/verify-login-otp"
+        private const val APP_VERSION = "13.5.1"
+
+        // Ather moved login to its versioned "req" routes. The old /auth/v2 routes answer every
+        // client with a hard "Outdated App version." response and can no longer authenticate.
+        // Both current routes are gated by Firebase App Check (see AppCheckRequiredException).
+        private const val GENERATE_OTP_URL = "https://cerberus.ather.io/api/v2/req/9a11"
+        private const val VERIFY_OTP_URL = "https://cerberus.ather.io/api/v2/req/9a12"
+
+        private const val APP_CHECK_MISSING = 1013
+        private const val APP_CHECK_INVALID = 1014
         private const val ME_URL = "https://cerberus.ather.io/api/v1/me"
         private const val FIREBASE_SCOOTERS_URL =
             "https://cerberus.ather.io/api/v2/auth/user/scooters/firebase-dbs"
@@ -351,3 +376,21 @@ class AtherAuthApi(
 
 class AuthExpiredException(message: String? = null) :
     IOException(message ?: "Session expired. Please sign in again.")
+
+/**
+ * Raised when Ather's login service rejects a request because it carries no acceptable Firebase
+ * App Check attestation (errorCode 1013 when missing, 1014 when invalid).
+ *
+ * Since the official 13.x app, the OTP login routes only accept attestations minted by the
+ * official Ather app, bound to its package, signing certificate, and Firebase project.
+ * Third-party clients cannot produce one, so OTP sign-in cannot complete in Athr+.
+ * Already-imported sessions are unaffected and keep working.
+ */
+class AppCheckRequiredException(val errorCode: Int? = null) :
+    IOException(appCheckBlockedMessage(errorCode))
+
+private fun appCheckBlockedMessage(errorCode: Int?): String {
+    val suffix = errorCode?.let { " (App Check error $it)" }.orEmpty()
+    return "Ather now allows OTP sign-in only in its official app$suffix. " +
+        "Import a session file to keep using Athr+ — see the README, Sign-in status."
+}
